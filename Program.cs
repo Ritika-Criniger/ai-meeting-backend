@@ -1,12 +1,13 @@
 var builder = WebApplication.CreateBuilder(args);
 
-// ❌ REMOVE UseUrls completely (Railway handles port)
-// builder.WebHost.UseUrls("http://0.0.0.0:5241", "http://localhost:5241");
+// 🔥 RAILWAY COMPATIBLE PORT BINDING (MOST IMPORTANT)
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
-// Add Controllers
+// Controllers
 builder.Services.AddControllers();
 
-// Add CORS (Required for React Native / Expo)
+// CORS (Expo / React Native)
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -21,7 +22,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Increase max file upload size (for audio files)
+// Audio upload limit
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = 52428800; // 50 MB
@@ -29,15 +30,15 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(optio
 
 var app = builder.Build();
 
-// Use CORS FIRST
+// CORS first
 app.UseCors("AllowAll");
 
-// Swagger (Railway prod me bhi ok)
+// Swagger (prod me bhi OK)
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// Map Controllers
+// Controllers
 app.MapControllers();
 
-// ❗ IMPORTANT: DO NOT PASS ANY URL OR PORT HERE
+// ✅ IMPORTANT: just Run
 app.Run();
