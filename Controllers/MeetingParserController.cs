@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -11,276 +12,248 @@ namespace AiMeetingBackend.Controllers
     public class MeetingParserController : ControllerBase
     {
         private readonly IConfiguration _config;
-        private readonly ILogger<MeetingParserController> _logger;
 
-        public MeetingParserController(
-            IConfiguration config,
-            ILogger<MeetingParserController> logger)
+        public MeetingParserController(IConfiguration config)
         {
             _config = config;
-            _logger = logger;
         }
 
         [HttpPost]
-        public async Task<IActionResult> ParseMeeting([FromBody] MeetingRequest request)
+        public async Task<IActionResult> Parse([FromBody] ParseRequest request)
         {
             if (request == null || string.IsNullOrWhiteSpace(request.Text))
-                return BadRequest(new { success = false, error = "Text is required" });
-
-            _logger.LogInformation($"📝 Parsing text: {request.Text}");
-
-            MeetingParseResult result = new();
-            bool aiSucceeded = false;
-
-            try
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
-                result = await ExtractWithAI(request.Text, cts.Token);
-                aiSucceeded = true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning($"⚠️ AI failed: {ex.Message}");
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Input text missing"
+                });
             }
 
-            // 🔥 Regex fallback if AI failed OR data is suspicious
-            result = ApplyRegexFallback(request.Text, result);
+            var groqKey = _config["Groq:ApiKey"];
+            if (string.IsNullOrWhiteSpace(groqKey))
+            {
+                return StatusCode(500, "Groq API key missing");
+            }
 
-            // 🔥 Final normalization
-            result = ProcessDatesAndTimes(result, request.Text);
+            var userText = request.Text.Trim();
 
-            var validation = ValidateResult(result);
+            // ===============================
+            // 1️⃣ CALL GROQ FOR EXTRACTION
+            // ===============================
+            var aiResult = await CallGroqAsync(userText, groqKey);
+
+            // ===============================
+            // 2️⃣ SAFE FALLBACK (REGEX ONLY IF EMPTY)
+            // ===============================
+            ApplyRegexFallback(userText, aiResult);
+
+            // ===============================
+            // 3️⃣ NORMALIZATION (HELPERS)
+            // ===============================
+
+            // 🔹 NAME → Always Roman English
+            if (!string.IsNullOrWhiteSpace(aiResult.ClientName))
+            {
+                aiResult.ClientName =
+                    HindiRomanTransliterator.ToRoman(aiResult.ClientName);
+            }
+
+            // 🔹 DATE
+            if (!string.IsNullOrWhiteSpace(aiResult.MeetingDate))
+            {
+                aiResult.MeetingDate =
+                    DateHelper.ResolveDate(aiResult.MeetingDate);
+            }
+
+            // 🔹 TIME
+            if (!string.IsNullOrWhiteSpace(aiResult.StartTime))
+            {
+                aiResult.StartTime =
+                    TimeHelper.Normalize(aiResult.StartTime, userText);
+            }
+
+            if (!string.IsNullOrWhiteSpace(aiResult.EndTime))
+            {
+                aiResult.EndTime =
+                    TimeHelper.Normalize(aiResult.EndTime, userText);
+            }
+
+            // ===============================
+            // 4️⃣ VALIDATION
+            // ===============================
+            var errors = Validate(aiResult);
 
             return Ok(new
             {
-                success = validation.isValid,
-                data = result,
-                errors = validation.errors
+                success = errors.Count == 0,
+                data = new
+                {
+                    clientName = aiResult.ClientName,
+                    mobileNumber = aiResult.MobileNumber,
+                    meetingDate = aiResult.MeetingDate,
+                    startTime = aiResult.StartTime,
+                    endTime = aiResult.EndTime
+                },
+                errors,
+                confidence = aiResult.Confidence
             });
         }
 
-        // ================= AI EXTRACTION =================
-        private async Task<MeetingParseResult> ExtractWithAI(string text, CancellationToken ct)
+        // ==================================================
+        // 🔥 GROQ CALL (STRICT JSON)
+        // ==================================================
+        private async Task<AiResult> CallGroqAsync(string text, string apiKey)
         {
-            var apiKey = _config["Groq:ApiKey"];
-            if (string.IsNullOrWhiteSpace(apiKey))
-                throw new Exception("Groq API key missing");
-
-            var today = DateTime.Today.ToString("dddd, dd MMMM yyyy");
-
-            var prompt = $@"
-You are a meeting scheduler AI. Extract details from Hindi/English/Hinglish text.
-
-Current Date: {today}
-
-CRITICAL RULES:
-1. DATE EXTRACTION:
-   - PRESERVE ""next/agle"" keyword with day names
-   - If you see Hindi: ""अगले सोमवार"" → output ""agle somwar""
-   - If you see: ""नेक्स्ट फ्राइडे"" → output ""next friday""
-   - If you see: ""कल"" → output ""kal""
-   - If you see: ""परसों"" → output ""parso""
-   - If you see: ""आज"" → output ""aaj""
-   - Convert Hindi weekday names to Roman: सोमवार→somwar, मंगलवार→mangal, बुधवार→budh, गुरुवार→guru, शुक्रवार→friday, शनिवार→shani, रविवार→ravi
-   - Keep phrases like ""3 din baad"", ""after 2 days"" as-is
-   - DO NOT calculate exact dates - keep it as phrase
-
-2. TIME EXTRACTION:
-   - Extract hour numbers: ""7 बजे"" → ""7""
-   - If range: ""7 से 8"" → startTime=""7"", endTime=""8""
-   - Don't add AM/PM (backend will handle)
-
-3. NAME EXTRACTION:
-   - Keep names EXACTLY as spoken (Hindi or English)
-   - ""संदीप कारपेंटर"" → ""संदीप कारपेंटर"" (unchanged)
-   - ""Rohit Kumar"" → ""Rohit Kumar"" (unchanged)
-
-4. MOBILE:
-   - Extract 10-digit numbers starting with 6-9
-
-5. OUTPUT FORMAT:
-   - Return ONLY valid JSON, no explanation
-   - Empty string if field not found
-
-JSON Schema:
-{{
-  ""clientName"": """",
-  ""mobileNumber"": """",
-  ""meetingDate"": """",
-  ""startTime"": """",
-  ""endTime"": """"
-}}
-
-Text to parse:
-{text}
-";
-
             using var http = new HttpClient();
-            http.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
+            http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", apiKey);
 
             var payload = new
             {
-                model = "llama-3.1-8b-instant",
-                messages = new[] { new { role = "user", content = prompt } },
-                temperature = 0.1,
-                max_tokens = 200
+                model = "llama-3.3-70b-versatile",
+                temperature = 0,
+                messages = new[]
+                {
+                    new
+                    {
+                        role = "system",
+                        content =
+@"You are an information extraction AI for a CRM meeting scheduler.
+
+Rules:
+- Extract only what is explicitly present.
+- Do NOT guess.
+- Output valid JSON only.
+- Name may be Hindi or English.
+- Date as spoken phrase.
+- Time as hour numbers only.
+- No AM/PM.
+- Empty string if not found."
+                    },
+                    new
+                    {
+                        role = "user",
+                        content = text
+                    }
+                }
             };
 
-            var res = await http.PostAsync(
+            var response = await http.PostAsync(
                 "https://api.groq.com/openai/v1/chat/completions",
-                new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
-                ct
+                new StringContent(
+                    JsonSerializer.Serialize(payload),
+                    Encoding.UTF8,
+                    "application/json"
+                )
             );
 
-            var raw = await res.Content.ReadAsStringAsync(ct);
-            if (!res.IsSuccessStatusCode)
-                throw new Exception(raw);
+            var raw = await response.Content.ReadAsStringAsync();
 
-            var doc = JsonDocument.Parse(raw);
-            var content = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
+            if (!response.IsSuccessStatusCode)
+                return new AiResult();
 
-            var json = content!.Substring( content.IndexOf('{'),
-                                           content.LastIndexOf('}') - content.IndexOf('{') + 1);
+            using var doc = JsonDocument.Parse(raw);
+            var content =
+                doc.RootElement
+                   .GetProperty("choices")[0]
+                   .GetProperty("message")
+                   .GetProperty("content")
+                   .GetString();
 
-            return JsonSerializer.Deserialize<MeetingParseResult>(json) ?? new MeetingParseResult();
+            return ParseAiJson(content);
         }
 
-        // ================= REGEX FALLBACK (WITH HINDI SUPPORT) =================
-        private MeetingParseResult ApplyRegexFallback(string text, MeetingParseResult result)
+        // ==================================================
+        // 🔥 AI JSON PARSE (SAFE)
+        // ==================================================
+        private AiResult ParseAiJson(string json)
         {
-            // ---------- Mobile ----------
-            if (string.IsNullOrWhiteSpace(result.mobileNumber))
+            try
             {
-                var m = Regex.Match(text, @"\b[6-9]\d{9}\b");
-                if (m.Success) result.mobileNumber = m.Value;
+                return JsonSerializer.Deserialize<AiResult>(json)
+                       ?? new AiResult();
             }
-
-            // ---------- Name (🔥 HINDI SUPPORT ADDED) ----------
-            if (string.IsNullOrWhiteSpace(result.clientName))
+            catch
             {
-                // 🔥 NEW: Support both English and Hindi characters
-                var nameMatch = Regex.Match(
-                    text,
-                    @"(?:with|ke\s+sath|के\s+साथ)\s+([\p{L}\s]{2,30}?)(?=\s+(?:\d|se|to|kal|parso|aaj|meeting|मीटिंग|shaam|subah|mobile|phone|\d{10}))",
-                    RegexOptions.IgnoreCase);
-
-                if (nameMatch.Success)
-                {
-                    var name = nameMatch.Groups[1].Value.Trim();
-                    // Remove trailing prepositions
-                    name = Regex.Replace(name, @"\s+(se|sa|ke|ko|ka)$", "", RegexOptions.IgnoreCase);
-                    result.clientName = name;
-                }
+                return new AiResult();
             }
-
-            // ---------- Date ----------
-            if (string.IsNullOrWhiteSpace(result.meetingDate))
-            {
-                if (Regex.IsMatch(text, @"kal|tomorrow|कल", RegexOptions.IgnoreCase))
-                    result.meetingDate = "kal";
-                else if (Regex.IsMatch(text, @"parso|day after tomorrow|परसों", RegexOptions.IgnoreCase))
-                    result.meetingDate = "parso";
-                else if (Regex.IsMatch(text, @"(next|agle|अगले)\s+(somwar|monday|mangal|tuesday|budh|wednesday|guru|thursday|shukr|friday|shani|saturday|ravi|sunday|सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार)", RegexOptions.IgnoreCase))
-                {
-                    var dayMatch = Regex.Match(text, @"(next|agle|अगले)\s+(somwar|monday|mangal|tuesday|budh|wednesday|guru|thursday|shukr|friday|shani|saturday|ravi|sunday|सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार)", RegexOptions.IgnoreCase);
-                    result.meetingDate = dayMatch.Value.ToLower();
-                }
-            }
-
-            // ---------- TIME (🔥 MAIN FIX) ----------
-            bool hasRangeWords = Regex.IsMatch(text, @"\b(se|to|tak|-)\b", RegexOptions.IgnoreCase);
-
-            bool aiTimeInvalid =
-                !string.IsNullOrWhiteSpace(result.startTime) &&
-                !string.IsNullOrWhiteSpace(result.endTime) &&
-                result.startTime == result.endTime;
-
-            if (
-                (string.IsNullOrWhiteSpace(result.startTime) &&
-                 string.IsNullOrWhiteSpace(result.endTime))
-                ||
-                (hasRangeWords && aiTimeInvalid)
-            )
-            {
-                var rangeMatch = Regex.Match(
-                    text,
-                    @"\b(\d{1,2})\s*(?:to|se|tak|-)\s*(\d{1,2})\b",
-                    RegexOptions.IgnoreCase
-                );
-
-                if (rangeMatch.Success)
-                {
-                    result.startTime = rangeMatch.Groups[1].Value;
-                    result.endTime   = rangeMatch.Groups[2].Value;
-                }
-            }
-
-            return result;
         }
 
-        // ================= FINAL NORMALIZATION =================
-        private MeetingParseResult ProcessDatesAndTimes(MeetingParseResult result, string fullText)
+        // ==================================================
+        // 🔥 REGEX FALLBACK (ONLY IF EMPTY)
+        // ==================================================
+        private void ApplyRegexFallback(string text, AiResult result)
         {
-            if (!string.IsNullOrWhiteSpace(result.meetingDate))
+            // Mobile
+            if (string.IsNullOrWhiteSpace(result.MobileNumber))
             {
-                var resolved = DateHelper.ResolveDate(result.meetingDate);
-                if (!string.IsNullOrWhiteSpace(resolved))
-                    result.meetingDate = resolved;
+                var mobileMatch =
+                    Regex.Match(text, @"\b[6-9]\d{9}\b");
+                if (mobileMatch.Success)
+                    result.MobileNumber = mobileMatch.Value;
             }
 
-            if (!string.IsNullOrWhiteSpace(result.startTime))
-                result.startTime = TimeHelper.Normalize(result.startTime, fullText);
-
-            if (!string.IsNullOrWhiteSpace(result.endTime))
-                result.endTime = TimeHelper.Normalize(result.endTime, fullText);
-
-            // 🔥 OPTIONAL: Hindi → Roman (only if you want transliteration)
-            // Comment this out if you want to keep Hindi names as-is
-            /*
-            if (!string.IsNullOrWhiteSpace(result.clientName) &&
-                HindiRomanTransliterator.IsHindi(result.clientName))
+            // Time range
+            if (string.IsNullOrWhiteSpace(result.StartTime) ||
+                string.IsNullOrWhiteSpace(result.EndTime))
             {
-                result.clientName = HindiRomanTransliterator.ToRoman(result.clientName);
-            }
-            */
+                var timeMatch =
+                    Regex.Match(text, @"(\d{1,2})\s*(se|to)\s*(\d{1,2})",
+                        RegexOptions.IgnoreCase);
 
-            return result;
+                if (timeMatch.Success)
+                {
+                    if (string.IsNullOrWhiteSpace(result.StartTime))
+                        result.StartTime = timeMatch.Groups[1].Value;
+
+                    if (string.IsNullOrWhiteSpace(result.EndTime))
+                        result.EndTime = timeMatch.Groups[3].Value;
+                }
+            }
         }
 
-        // ================= VALIDATION =================
-        private (bool isValid, List<string> errors) ValidateResult(MeetingParseResult result)
+        // ==================================================
+        // 🔥 VALIDATION
+        // ==================================================
+        private List<string> Validate(AiResult r)
         {
             var errors = new List<string>();
 
-            if (string.IsNullOrWhiteSpace(result.meetingDate))
+            if (string.IsNullOrWhiteSpace(r.ClientName))
+                errors.Add("Client name missing");
+
+            if (string.IsNullOrWhiteSpace(r.MobileNumber))
+                errors.Add("Mobile number missing");
+
+            if (string.IsNullOrWhiteSpace(r.MeetingDate))
                 errors.Add("Meeting date missing");
 
-            if (string.IsNullOrWhiteSpace(result.startTime))
+            if (string.IsNullOrWhiteSpace(r.StartTime))
                 errors.Add("Start time missing");
 
-            if (string.IsNullOrWhiteSpace(result.endTime))
+            if (string.IsNullOrWhiteSpace(r.EndTime))
                 errors.Add("End time missing");
 
-            return (errors.Count == 0, errors);
+            return errors;
         }
     }
 
-    // ================= MODELS =================
-    public class MeetingRequest
+    // ==================================================
+    // MODELS
+    // ==================================================
+    public class ParseRequest
     {
         public string Text { get; set; } = "";
     }
 
-    public class MeetingParseResult
+    public class AiResult
     {
-        public string clientName { get; set; } = "";
-        public string mobileNumber { get; set; } = "";
-        public string meetingDate { get; set; } = "";
-        public string startTime { get; set; } = "";
-        public string endTime { get; set; } = "";
+        public string ClientName { get; set; } = "";
+        public string MobileNumber { get; set; } = "";
+        public string MeetingDate { get; set; } = "";
+        public string StartTime { get; set; } = "";
+        public string EndTime { get; set; } = "";
+        public double Confidence { get; set; } = 0.9;
     }
 }

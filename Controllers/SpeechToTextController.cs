@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AiMeetingBackend.Controllers
 {
@@ -9,124 +11,73 @@ namespace AiMeetingBackend.Controllers
     public class SpeechToTextController : ControllerBase
     {
         private readonly IConfiguration _config;
-        private readonly ILogger<SpeechToTextController> _logger;
 
-        public SpeechToTextController(
-            IConfiguration config,
-            ILogger<SpeechToTextController> logger)
+        public SpeechToTextController(IConfiguration config)
         {
             _config = config;
-            _logger = logger;
         }
 
         [HttpPost]
         [Consumes("multipart/form-data")]
-        public async Task<IActionResult> ConvertSpeechToText([FromForm] IFormFile audio)
+        [RequestSizeLimit(25_000_000)] // ~25 MB
+        public async Task<IActionResult> Convert([FromForm] IFormFile audio)
         {
             if (audio == null || audio.Length == 0)
-            {
-                _logger.LogWarning("❌ No audio file received");
-                return BadRequest(new { success = false, error = "Audio file missing" });
-            }
+                return BadRequest("Audio file missing");
+
+            var groqKey = _config["Groq:ApiKey"];
+            if (string.IsNullOrWhiteSpace(groqKey))
+                return StatusCode(500, "Groq API key missing");
 
             try
             {
-                var apiKey = _config["Groq:ApiKey"];
-                if (string.IsNullOrWhiteSpace(apiKey))
-                {
-                    _logger.LogError("❌ Groq API key not configured");
-                    return StatusCode(500, new { success = false, error = "API key not configured" });
-                }
-
-                _logger.LogInformation($"🎧 Audio received: {audio.FileName}, {audio.Length} bytes, Type: {audio.ContentType}");
-
-                using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-                httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                using var http = new HttpClient();
+                http.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", groqKey);
 
                 using var form = new MultipartFormDataContent();
 
-                // 🔥 Copy to memory stream to avoid stream closure issues
-                using var memoryStream = new MemoryStream();
-                await audio.CopyToAsync(memoryStream);
-                memoryStream.Position = 0;
+                using var ms = new MemoryStream();
+                await audio.CopyToAsync(ms);
+                ms.Position = 0;
 
-                var audioContent = new StreamContent(memoryStream);
-                
-                // 🔥 Set correct content type based on file extension
-                var contentType = audio.ContentType;
-                if (string.IsNullOrEmpty(contentType) || contentType == "application/octet-stream")
-                {
-                    var extension = Path.GetExtension(audio.FileName).ToLower();
-                    contentType = extension switch
-                    {
-                        ".m4a" => "audio/m4a",
-                        ".mp3" => "audio/mpeg",
-                        ".wav" => "audio/wav",
-                        ".webm" => "audio/webm",
-                        ".ogg" => "audio/ogg",
-                        _ => "audio/mpeg"
-                    };
-                }
-                
-                audioContent.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+                var audioContent = new StreamContent(ms);
+                audioContent.Headers.ContentType =
+                    new MediaTypeHeaderValue(audio.ContentType);
+
                 form.Add(audioContent, "file", audio.FileName);
 
-                // Whisper API parameters
+                // 🔥 GROQ WHISPER MODEL
                 form.Add(new StringContent("whisper-large-v3"), "model");
-                form.Add(new StringContent("hi"), "language"); // Hindi priority
-                form.Add(new StringContent("0.0"), "temperature"); // More deterministic
 
-                _logger.LogInformation("📤 Sending to Groq Whisper API...");
-
-                var response = await httpClient.PostAsync(
+                var response = await http.PostAsync(
                     "https://api.groq.com/openai/v1/audio/transcriptions",
                     form
                 );
 
-                var rawResponse = await response.Content.ReadAsStringAsync();
+                var raw = await response.Content.ReadAsStringAsync();
 
                 if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogError($"❌ Whisper API error ({response.StatusCode}): {rawResponse}");
-                    return StatusCode((int)response.StatusCode, 
-                        new { success = false, error = "Whisper transcription failed", details = rawResponse });
-                }
+                    return StatusCode(500, raw);
 
-                _logger.LogInformation($"✅ Whisper API response received");
+                using var doc = JsonDocument.Parse(raw);
+                var text = doc.RootElement.GetProperty("text").GetString() ?? "";
 
-                using var doc = JsonDocument.Parse(rawResponse);
-
-                if (!doc.RootElement.TryGetProperty("text", out var textElement))
-                {
-                    _logger.LogWarning("⚠️ No 'text' property in response");
-                    return Ok(new { success = false, text = "", error = "No text in response" });
-                }
-
-                var transcribedText = textElement.GetString()?.Trim() ?? "";
-
-                if (string.IsNullOrWhiteSpace(transcribedText))
-                {
-                    _logger.LogWarning("⚠️ Empty transcription");
-                    return Ok(new { success = false, text = "", error = "Empty transcription" });
-                }
-
-                _logger.LogInformation($"📝 Transcription: {transcribedText}");
+                // ==================================================
+                // 🔥 BASIC CLEANUP ONLY (NO SEMANTIC CHANGES)
+                // ==================================================
+                text = Regex.Replace(text, @"\s+", " ").Trim();
 
                 return Ok(new
                 {
                     success = true,
-                    text = transcribedText
+                    provider = "groq",
+                    text
                 });
-            }
-            catch (TaskCanceledException)
-            {
-                _logger.LogError("❌ Request timeout");
-                return StatusCode(504, new { success = false, error = "Request timeout" });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Speech-to-text processing failed");
-                return StatusCode(500, new { success = false, error = "Processing failed", details = ex.Message });
+                return StatusCode(500, ex.Message);
             }
         }
     }
