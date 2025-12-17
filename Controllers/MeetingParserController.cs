@@ -37,6 +37,7 @@ namespace AiMeetingBackend.Controllers
             }
 
             var userText = request.Text.Trim();
+            Console.WriteLine($"📝 INPUT TEXT: {userText}");
 
             // ===============================
             // 1️⃣ CALL GROQ FOR EXTRACTION
@@ -67,21 +68,21 @@ namespace AiMeetingBackend.Controllers
             // 🔹 DATE
             if (!string.IsNullOrWhiteSpace(aiResult.MeetingDate))
             {
-                aiResult.MeetingDate =
-                    DateHelper.ResolveDate(aiResult.MeetingDate);
+                aiResult.MeetingDate = DateHelper.ResolveDate(aiResult.MeetingDate);
+                Console.WriteLine($"✅ FINAL DATE: {aiResult.MeetingDate}");
             }
 
             // 🔹 TIME
             if (!string.IsNullOrWhiteSpace(aiResult.StartTime))
             {
-                aiResult.StartTime =
-                    TimeHelper.Normalize(aiResult.StartTime, userText);
+                aiResult.StartTime = TimeHelper.Normalize(aiResult.StartTime, userText);
+                Console.WriteLine($"✅ FINAL START TIME: {aiResult.StartTime}");
             }
 
             if (!string.IsNullOrWhiteSpace(aiResult.EndTime))
             {
-                aiResult.EndTime =
-                    TimeHelper.Normalize(aiResult.EndTime, userText);
+                aiResult.EndTime = TimeHelper.Normalize(aiResult.EndTime, userText);
+                Console.WriteLine($"✅ FINAL END TIME: {aiResult.EndTime}");
             }
 
             // ===============================
@@ -106,11 +107,12 @@ namespace AiMeetingBackend.Controllers
         }
 
         // ==================================================
-        // 🔥 FIXED GROQ CALL WITH BETTER PROMPT
+        // 🔥 IMPROVED GROQ CALL WITH ENHANCED PROMPT
         // ==================================================
         private async Task<AiResult> CallGroqAsync(string text, string apiKey)
         {
             using var http = new HttpClient();
+            http.Timeout = TimeSpan.FromSeconds(20);
             http.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", apiKey);
 
@@ -118,38 +120,115 @@ namespace AiMeetingBackend.Controllers
             {
                 model = "llama-3.3-70b-versatile",
                 temperature = 0,
-                response_format = new { type = "json_object" },  // 🔥 FORCE JSON
+                response_format = new { type = "json_object" },
                 messages = new[]
                 {
                     new
                     {
                         role = "system",
-                        content =
-@"You are a meeting information extractor. Extract ONLY the following fields from the user's text and return VALID JSON.
+                        content = @"You are an expert meeting information extractor for Indian users speaking Hindi, English, or Hinglish. Extract ONLY these fields and return VALID JSON.
 
-Fields to extract:
-- clientName: FULL person's name EXACTLY as spoken (preserve Hindi/English spelling)
-- mobileNumber: 10-digit phone number (digits only)
-- meetingDate: Date phrase EXACTLY as spoken (e.g., ""tomorrow"", ""22 December 2025"", ""after 2 days"", ""आफ्टर टू डेज"")
-- startTime: Start time with AM/PM if mentioned (e.g., ""7"", ""7 PM"", ""7 पीम"")
-- endTime: End time with AM/PM if mentioned (e.g., ""8"", ""8 PM"", ""8 पीम"")
+**FIELDS TO EXTRACT:**
 
-CRITICAL RULES:
-1. For clientName: Extract COMPLETE name EXACTLY as written/spoken
+1. **clientName**: FULL person's name EXACTLY as spoken (preserve Hindi/English)
+   - ""राजेश धनोत्या"" → ""राजेश धनोत्या""
    - ""Akash Daima"" → ""Akash Daima""
-   - ""राजेश धनोत्या"" → ""राजेश धनोत्या"" (preserve Devanagari exactly)
-2. For date: Keep EXACTLY as spoken, including mixed Hindi-English
-   - ""आफ्टर टू डेज"" → ""आफ्टर टू डेज""
-   - ""after 2 days"" → ""after 2 days""
-3. For time: If PM/AM mentioned, include it
-   - ""7 पीम"" → ""7 PM""
-   - ""7 pm"" → ""7 PM""
-4. Use empty string """" if not found
-5. Return ONLY valid JSON
+   - ""रमेश कुमार"" → ""रमेश कुमार""
+   - ""meeting with X"" → extract X
+   - ""X ke saath meeting"" → extract X
 
-Example:
-Input: ""राजेश धनोत्या के साथ मीटिंग फिक्स करो आफ्टर टू डेज 7 पीम टू 8 पीम""
-Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumber"": """", ""meetingDate"": ""आफ्टर टू डेज"", ""startTime"": ""7 PM"", ""endTime"": ""8 PM""}"
+2. **mobileNumber**: 10-digit Indian phone number (digits only, no spaces)
+   - Common patterns: 9876543210, 98765 43210, +91 9876543210
+   - Extract only: ""9876543210""
+   - Ignore other numbers (dates, times, etc.)
+
+3. **meetingDate**: Date phrase EXACTLY as spoken (do NOT convert to dates)
+   - ""tomorrow"" → ""tomorrow""
+   - ""kal"" → ""kal""
+   - ""parso"" → ""parso""
+   - ""after 2 days"" → ""after 2 days""
+   - ""next friday"" → ""next friday""
+   - ""22 december 2025"" → ""22 december 2025""
+
+4. **startTime**: Start time EXACTLY as mentioned
+   - ""7 PM"" → ""7 PM""
+   - ""10"" → ""10""
+   - ""4:30"" → ""4:30""
+   - ""shaam 4"" → ""4""
+
+5. **endTime**: End time EXACTLY as mentioned
+   - ""8 PM"" → ""8 PM""
+   - ""11"" → ""11""
+   - ""5:30"" → ""5:30""
+
+**🔥 CRITICAL TIME RANGE RULES:**
+
+When user says ""X se Y"" or ""X to Y"":
+- X = START time (FIRST number/time)
+- Y = END time (SECOND number/time)
+- This is NOT addition, NOT duration calculation
+
+Examples:
+- ""4 se 4:30"" → startTime=""4"", endTime=""4:30"" 
+  ❌ WRONG: startTime=""4"", endTime=""6"" (DO NOT ADD!)
+  
+- ""10 to 11"" → startTime=""10"", endTime=""11""
+  ❌ WRONG: startTime=""10"", endTime=""21"" (DO NOT ADD!)
+
+- ""7 PM se 8 PM"" → startTime=""7 PM"", endTime=""8 PM""
+
+- ""4:30 se 5:45"" → startTime=""4:30"", endTime=""5:45""
+
+- ""shaam 4 se 4:30"" → startTime=""4"", endTime=""4:30""
+
+**OTHER CRITICAL RULES:**
+
+⚠️ NAME EXTRACTION:
+- Extract complete names, don't truncate
+- Preserve original script (Hindi/English/Mixed)
+- ""X ke saath meeting"" → extract X
+- ""meeting with X"" → extract X
+- Remove titles: Mr, Mrs, Shri, etc.
+
+⚠️ MOBILE NUMBER:
+- Only extract 10-digit numbers starting with 6-9
+- Remove spaces: ""98765 43210"" → ""9876543210""
+- Ignore date numbers, time numbers
+
+⚠️ DATE KEYWORDS:
+- ""kal"" can mean tomorrow
+- ""parso"" means day after tomorrow
+- ""agle"" or ""next"" means skip to next occurrence
+
+⚠️ TIME KEYWORDS:
+- ""shaam"" or ""evening"" → PM
+- ""subah"" or ""morning"" → AM
+- ""raat"" or ""night"" → PM
+- ""ko"" is a Hindi suffix (ignore it)
+
+⚠️ DEFAULT VALUES:
+- Use empty string """" if field not found
+- Do NOT guess or make up information
+- Do NOT calculate or manipulate numbers
+
+**EXAMPLES:**
+
+Input: ""meeting fix karo 4 se 4:30""
+Output: {""clientName"": """", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": ""4"", ""endTime"": ""4:30""}
+
+Input: ""राजेश धनोत्या के साथ मीटिंग kal 7 PM से 8 PM""
+Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumber"": """", ""meetingDate"": ""kal"", ""startTime"": ""7 PM"", ""endTime"": ""8 PM""}
+
+Input: ""akash daima 9876543210 se milna hai parso 10 se 11""
+Output: {""clientName"": ""akash daima"", ""mobileNumber"": ""9876543210"", ""meetingDate"": ""parso"", ""startTime"": ""10"", ""endTime"": ""11""}
+
+Input: ""meeting tomorrow with ravi kumar at 3:30 PM to 5 PM""
+Output: {""clientName"": ""ravi kumar"", ""mobileNumber"": """", ""meetingDate"": ""tomorrow"", ""startTime"": ""3:30 PM"", ""endTime"": ""5 PM""}
+
+Input: ""shaam 8 ko meeting rakesh 9123456789""
+Output: {""clientName"": ""rakesh"", ""mobileNumber"": ""9123456789"", ""meetingDate"": """", ""startTime"": ""8"", ""endTime"": """"}
+
+Return ONLY valid JSON, no markdown, no extra text."
                     },
                     new
                     {
@@ -199,13 +278,13 @@ Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumb
         }
 
         // ==================================================
-        // 🔥 IMPROVED JSON PARSER WITH BETTER ERROR HANDLING
+        // 🔥 IMPROVED JSON PARSER
         // ==================================================
         private AiResult ParseAiJson(string json)
         {
             try
             {
-                // Remove any markdown code blocks if present
+                // Remove markdown code blocks if present
                 json = json.Trim();
                 if (json.StartsWith("```"))
                 {
@@ -221,7 +300,7 @@ Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumb
 
                 var result = JsonSerializer.Deserialize<AiResult>(json, options);
                 
-                Console.WriteLine($"✅ PARSED RAW: Name='{result?.ClientName}', Mobile={result?.MobileNumber}, Date={result?.MeetingDate}, Start={result?.StartTime}, End={result?.EndTime}");
+                Console.WriteLine($"✅ PARSED: Name='{result?.ClientName}', Mobile={result?.MobileNumber}, Date={result?.MeetingDate}, Start={result?.StartTime}, End={result?.EndTime}");
                 
                 return result ?? new AiResult();
             }
@@ -234,16 +313,23 @@ Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumb
         }
 
         // ==================================================
-        // 🔥 ENHANCED REGEX FALLBACK
+        // 🔥 ENHANCED REGEX FALLBACK - IMPROVED ACCURACY
         // ==================================================
         private void ApplyRegexFallback(string text, AiResult result)
         {
             Console.WriteLine("🔍 APPLYING REGEX FALLBACK...");
 
-            // Mobile - look for 10-digit number starting with 6-9
+            // ===============================
+            // 📱 MOBILE NUMBER - ENHANCED
+            // ===============================
             if (string.IsNullOrWhiteSpace(result.MobileNumber))
             {
-                var mobileMatch = Regex.Match(text, @"\b[6-9]\d{9}\b");
+                // Remove spaces first for phone number detection
+                var textNoSpaces = Regex.Replace(text, @"(\d)\s+(\d)", "$1$2");
+                
+                // Pattern: 10-digit number starting with 6-9
+                var mobileMatch = Regex.Match(textNoSpaces, @"\b[6-9]\d{9}\b");
+                
                 if (mobileMatch.Success)
                 {
                     result.MobileNumber = mobileMatch.Value;
@@ -251,104 +337,184 @@ Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumb
                 }
             }
 
-            // Name - extract name before "meeting" or "के साथ"
+            // ===============================
+            // 👤 CLIENT NAME - ENHANCED
+            // ===============================
             if (string.IsNullOrWhiteSpace(result.ClientName))
             {
-                // Try Hindi pattern first
-                var hindiMatch = Regex.Match(text, @"([\u0900-\u097F\s]+)\s+के\s+साथ", RegexOptions.IgnoreCase);
+                // Pattern 1: "X ke saath meeting" (Hindi)
+                var hindiMatch = Regex.Match(text, @"([\p{L}\s]+?)\s+(?:ke\s+saath|साथ|के\s+साथ)\s+(?:meeting|मीटिंग|मिलना)", RegexOptions.IgnoreCase);
+                
+                // Pattern 2: "meeting with X" (English)
+                var englishMatch = Regex.Match(text, @"(?:meeting|meet)\s+(?:with\s+)?([\p{L}\s]+?)(?:\s+(?:on|at|tomorrow|today|kal|parso|next|after|\d|se|to|है|hai))", RegexOptions.IgnoreCase);
+                
+                // Pattern 3: Name before phone number
+                var beforePhoneMatch = Regex.Match(text, @"([\p{L}\s]+?)\s+[6-9]\d{9}", RegexOptions.IgnoreCase);
+                
                 if (hindiMatch.Success)
                 {
                     result.ClientName = hindiMatch.Groups[1].Value.Trim();
                     Console.WriteLine($"👤 REGEX FOUND NAME (Hindi): {result.ClientName}");
                 }
-                else
+                else if (englishMatch.Success)
                 {
-                    // Try English patterns
-                    var englishMatch = Regex.Match(text, @"(?:meeting|meet)\s+(?:with\s+)?([A-Za-z\s]+?)(?:\s+(?:on|at|tomorrow|today|yesterday)|\s+\d)", RegexOptions.IgnoreCase);
-                    if (englishMatch.Success)
-                    {
-                        result.ClientName = englishMatch.Groups[1].Value.Trim();
-                        Console.WriteLine($"👤 REGEX FOUND NAME (English): {result.ClientName}");
-                    }
+                    result.ClientName = englishMatch.Groups[1].Value.Trim();
+                    Console.WriteLine($"👤 REGEX FOUND NAME (English): {result.ClientName}");
+                }
+                else if (beforePhoneMatch.Success)
+                {
+                    result.ClientName = beforePhoneMatch.Groups[1].Value.Trim();
+                    Console.WriteLine($"👤 REGEX FOUND NAME (Before Phone): {result.ClientName}");
                 }
             }
 
-            // Date - look for common patterns
+            // ===============================
+            // 📅 MEETING DATE - ENHANCED
+            // ===============================
             if (string.IsNullOrWhiteSpace(result.MeetingDate))
             {
-                // Look for "tomorrow", "today", "kal", etc.
-                if (Regex.IsMatch(text, @"\b(tomorrow|kal|कल)\b", RegexOptions.IgnoreCase))
-                {
-                    result.MeetingDate = "tomorrow";
-                    Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
-                }
-                else if (Regex.IsMatch(text, @"\b(today|aaj|आज)\b", RegexOptions.IgnoreCase))
+                // Today
+                if (Regex.IsMatch(text, @"\b(today|aaj|आज|aj)\b", RegexOptions.IgnoreCase))
                 {
                     result.MeetingDate = "today";
                     Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
                 }
-                // 🔥 NEW: Handle "after X days" in both English and Hindi mixed
-                else if (Regex.IsMatch(text, @"(after|आफ्टर)\s+(two|2|टू)\s+(days|din|डेज|दिन)", RegexOptions.IgnoreCase))
+                // Tomorrow
+                else if (Regex.IsMatch(text, @"\b(tomorrow|kal|कल)\b", RegexOptions.IgnoreCase) && 
+                         !Regex.IsMatch(text, @"\b(next|agle|आगले)\s+(kal|कल)\b", RegexOptions.IgnoreCase))
                 {
-                    result.MeetingDate = "after 2 days";
+                    result.MeetingDate = "tomorrow";
                     Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
                 }
-                else if (Regex.IsMatch(text, @"(after|आफ्टर)\s+(\d+)\s+(days|din|डेज|दिन)", RegexOptions.IgnoreCase))
+                // Day after tomorrow
+                else if (Regex.IsMatch(text, @"\b(parso|parson|परसों|day\s+after\s+tomorrow|next\s+kal|agle\s+kal)\b", RegexOptions.IgnoreCase))
                 {
-                    var match = Regex.Match(text, @"(after|आफ्टर)\s+(\d+)\s+(days|din|डेज|दिन)", RegexOptions.IgnoreCase);
-                    result.MeetingDate = $"after {match.Groups[2].Value} days";
+                    result.MeetingDate = "parso";
                     Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
                 }
+                // After X days
                 else
                 {
-                    // Look for date patterns like "22 December 2025"
-                    var dateMatch = Regex.Match(text, @"(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december|जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर|दिसमबर)\s+(\d{4})", RegexOptions.IgnoreCase);
-                    if (dateMatch.Success)
+                    var afterMatch = Regex.Match(text, @"(?:after|baad|बाद)\s+(\d+|one|two|three|four|five|six|ek|do|teen|char|panch|che)\s+(?:days?|din|दिन|दिनों)", RegexOptions.IgnoreCase);
+                    
+                    if (afterMatch.Success)
                     {
-                        result.MeetingDate = dateMatch.Value;
+                        var numStr = afterMatch.Groups[1].Value.ToLower();
+                        var numMap = new Dictionary<string, string>
+                        {
+                            {"one", "1"}, {"two", "2"}, {"three", "3"}, {"four", "4"}, {"five", "5"}, {"six", "6"},
+                            {"ek", "1"}, {"do", "2"}, {"teen", "3"}, {"char", "4"}, {"panch", "5"}, {"che", "6"}
+                        };
+                        
+                        var days = numMap.ContainsKey(numStr) ? numMap[numStr] : numStr;
+                        result.MeetingDate = $"after {days} days";
                         Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
+                    }
+                    else
+                    {
+                        // Next weekday
+                        var weekdayMatch = Regex.Match(text, @"\b(?:(next|agle|आगले)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|somwar|somvaar|mangalwar|mangalvaar|budhwar|budhvaar|guruwar|guruvaar|shukravar|shukravaar|shaniwar|shanivaar|raviwar|ravivaar|सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार)\b", RegexOptions.IgnoreCase);
+                        
+                        if (weekdayMatch.Success)
+                        {
+                            result.MeetingDate = weekdayMatch.Value;
+                            Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
+                        }
+                        else
+                        {
+                            // Specific date: "22 december 2025"
+                            var dateMatch = Regex.Match(text, @"(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*(\d{4})?", RegexOptions.IgnoreCase);
+                            
+                            if (dateMatch.Success)
+                            {
+                                result.MeetingDate = dateMatch.Value;
+                                Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
+                            }
+                        }
                     }
                 }
             }
 
-            // Time range - look for patterns like "7 se 8", "10 pm to 11 pm", etc.
+            // ===============================
+            // 🕐 TIME RANGE - CRITICAL FIX
+            // ===============================
             if (string.IsNullOrWhiteSpace(result.StartTime) || string.IsNullOrWhiteSpace(result.EndTime))
             {
-                // 🔥 NEW: Handle "7 pm to 8 pm" or "7 पीम टू 8 पीम"
-                var pmTimeMatch = Regex.Match(text, @"(\d{1,2})\s*(pm|पीम|पी\.?म\.?)\s*(to|से|टू)\s*(\d{1,2})\s*(pm|पीम|पी\.?म\.?)", RegexOptions.IgnoreCase);
+                // Pattern 1: "7 PM se 8 PM" or "10 AM to 11 AM"
+                var pmTimeMatch = Regex.Match(text, @"(\d{1,2})(?::(\d{2}))?\s*(pm|am|पीएम|एएम)\s*(?:se|to|से|टू)\s*(\d{1,2})(?::(\d{2}))?\s*(pm|am|पीएम|एएम)", RegexOptions.IgnoreCase);
                 
+                // Pattern 2: "4:30 se 5:45" (both with minutes)
+                var timeWithMinutesMatch = Regex.Match(text, @"(\d{1,2}):(\d{2})\s*(?:se|to|से|टू)\s*(\d{1,2}):(\d{2})", RegexOptions.IgnoreCase);
+                
+                // Pattern 3: "4 se 4:30" (mixed format)
+                var mixedFormatMatch = Regex.Match(text, @"(\d{1,2})\s*(?:se|to|से|टू)\s*(\d{1,2}):(\d{2})", RegexOptions.IgnoreCase);
+                
+                // Pattern 4: "4 se 5" (simple)
+                var simpleTimeMatch = Regex.Match(text, @"(\d{1,2})\s*(?:se|to|से|टू)\s*(\d{1,2})(?!\:|\d)", RegexOptions.IgnoreCase);
+
                 if (pmTimeMatch.Success)
                 {
                     if (string.IsNullOrWhiteSpace(result.StartTime))
                     {
-                        result.StartTime = pmTimeMatch.Groups[1].Value + " PM";
-                        Console.WriteLine($"🕐 REGEX FOUND START TIME (PM): {result.StartTime}");
+                        var startHour = pmTimeMatch.Groups[1].Value;
+                        var startMin = pmTimeMatch.Groups[2].Success ? pmTimeMatch.Groups[2].Value : "00";
+                        var startPeriod = pmTimeMatch.Groups[3].Value.ToUpper().Replace("पीएम", "PM").Replace("एएम", "AM");
+                        
+                        result.StartTime = $"{startHour}:{startMin} {startPeriod}";
+                        Console.WriteLine($"🕐 REGEX FOUND START TIME: {result.StartTime}");
                     }
-
+                    
                     if (string.IsNullOrWhiteSpace(result.EndTime))
                     {
-                        result.EndTime = pmTimeMatch.Groups[4].Value + " PM";
-                        Console.WriteLine($"🕐 REGEX FOUND END TIME (PM): {result.EndTime}");
+                        var endHour = pmTimeMatch.Groups[4].Value;
+                        var endMin = pmTimeMatch.Groups[5].Success ? pmTimeMatch.Groups[5].Value : "00";
+                        var endPeriod = pmTimeMatch.Groups[6].Value.ToUpper().Replace("पीएम", "PM").Replace("एएम", "AM");
+                        
+                        result.EndTime = $"{endHour}:{endMin} {endPeriod}";
+                        Console.WriteLine($"🕐 REGEX FOUND END TIME: {result.EndTime}");
                     }
                 }
-                else
+                else if (timeWithMinutesMatch.Success)
                 {
-                    // Pattern: "7 se 8", "10 to 11", "7 बजे से 8 बजे"
-                    var timeMatch = Regex.Match(text, @"(\d{1,2})\s*(?:बजे\s*)?(?:se|to|से|टू)\s*(\d{1,2})", RegexOptions.IgnoreCase);
-                    
-                    if (timeMatch.Success)
+                    if (string.IsNullOrWhiteSpace(result.StartTime))
                     {
-                        if (string.IsNullOrWhiteSpace(result.StartTime))
-                        {
-                            result.StartTime = timeMatch.Groups[1].Value;
-                            Console.WriteLine($"🕐 REGEX FOUND START TIME: {result.StartTime}");
-                        }
-
-                        if (string.IsNullOrWhiteSpace(result.EndTime))
-                        {
-                            result.EndTime = timeMatch.Groups[2].Value;
-                            Console.WriteLine($"🕐 REGEX FOUND END TIME: {result.EndTime}");
-                        }
+                        result.StartTime = $"{timeWithMinutesMatch.Groups[1].Value}:{timeWithMinutesMatch.Groups[2].Value}";
+                        Console.WriteLine($"🕐 REGEX FOUND START TIME: {result.StartTime}");
+                    }
+                    
+                    if (string.IsNullOrWhiteSpace(result.EndTime))
+                    {
+                        result.EndTime = $"{timeWithMinutesMatch.Groups[3].Value}:{timeWithMinutesMatch.Groups[4].Value}";
+                        Console.WriteLine($"🕐 REGEX FOUND END TIME: {result.EndTime}");
+                    }
+                }
+                else if (mixedFormatMatch.Success)
+                {
+                    // ✅ CRITICAL: "4 se 4:30" means START=4, END=4:30
+                    if (string.IsNullOrWhiteSpace(result.StartTime))
+                    {
+                        result.StartTime = mixedFormatMatch.Groups[1].Value;
+                        Console.WriteLine($"🕐 REGEX FOUND START TIME: {result.StartTime}");
+                    }
+                    
+                    if (string.IsNullOrWhiteSpace(result.EndTime))
+                    {
+                        result.EndTime = $"{mixedFormatMatch.Groups[2].Value}:{mixedFormatMatch.Groups[3].Value}";
+                        Console.WriteLine($"🕐 REGEX FOUND END TIME: {result.EndTime}");
+                    }
+                }
+                else if (simpleTimeMatch.Success)
+                {
+                    if (string.IsNullOrWhiteSpace(result.StartTime))
+                    {
+                        result.StartTime = simpleTimeMatch.Groups[1].Value;
+                        Console.WriteLine($"🕐 REGEX FOUND START TIME: {result.StartTime}");
+                    }
+                    
+                    if (string.IsNullOrWhiteSpace(result.EndTime))
+                    {
+                        result.EndTime = simpleTimeMatch.Groups[2].Value;
+                        Console.WriteLine($"🕐 REGEX FOUND END TIME: {result.EndTime}");
                     }
                 }
             }
@@ -366,6 +532,8 @@ Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumb
 
             if (string.IsNullOrWhiteSpace(r.MobileNumber))
                 errors.Add("Mobile number missing");
+            else if (!Regex.IsMatch(r.MobileNumber, @"^[6-9]\d{9}$"))
+                errors.Add("Invalid mobile number format");
 
             if (string.IsNullOrWhiteSpace(r.MeetingDate))
                 errors.Add("Meeting date missing");

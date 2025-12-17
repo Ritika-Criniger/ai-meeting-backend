@@ -17,110 +17,234 @@ namespace AiMeetingBackend.Helpers
             time = time.Trim();
             string context = fullContext?.ToLower() ?? "";
 
+            Console.WriteLine($"🕐 NORMALIZING TIME: '{time}' (Context: '{context}')");
+
             // =========================
-            // 1️⃣ CHECK IF TIME ALREADY HAS AM/PM
+            // 1️⃣ ALREADY HAS AM/PM
             // =========================
-            if (Regex.IsMatch(time, @"\d{1,2}(:\d{2})?\s*(AM|PM)", RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(time, @"(AM|PM|am|pm|पीएम|एएम)", RegexOptions.IgnoreCase))
             {
-                var match = Regex.Match(time, @"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)", RegexOptions.IgnoreCase);
-                string hour = match.Groups[1].Value;
-                string minutes = match.Groups[2].Success ? match.Groups[2].Value : "00";
-                string meridiem = match.Groups[3].Value.ToUpper();
-                return $"{hour}:{minutes} {meridiem}";
+                var match = Regex.Match(time, @"(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm|पीएम|एएम)", RegexOptions.IgnoreCase);
+                
+                if (match.Success)
+                {
+                    string hour = match.Groups[1].Value;
+                    string minutes = match.Groups[2].Success ? match.Groups[2].Value : "00";
+                    string meridiem = match.Groups[3].Value.ToUpper();
+                    
+                    // Normalize Hindi PM/AM
+                    if (meridiem.Contains("पीएम"))
+                        meridiem = "PM";
+                    else if (meridiem.Contains("एएम"))
+                        meridiem = "AM";
+                    else
+                        meridiem = meridiem.Replace("am", "AM").Replace("pm", "PM");
+
+                    var result = $"{hour}:{minutes} {meridiem}";
+                    Console.WriteLine($"✅ TIME WITH AM/PM: {result}");
+                    return result;
+                }
             }
 
             // =========================
-            // 2️⃣ CONTEXT AM/PM DETECTION
+            // 2️⃣ ENHANCED CONTEXT AM/PM DETECTION
             // =========================
-            bool contextHasPM = Regex.IsMatch(context, @"\bpm\b", RegexOptions.IgnoreCase);
-            bool contextHasAM = Regex.IsMatch(context, @"\bam\b", RegexOptions.IgnoreCase);
+            bool contextHasPM = Regex.IsMatch(context, @"\b(pm|पीएम|evening|shaam|sham|शाम|night|raat|रात|ko|को|baad|बाद)\b", RegexOptions.IgnoreCase);
+            bool contextHasAM = Regex.IsMatch(context, @"\b(am|एएम|morning|subah|subhe|सुबह|savere|सवेरे)\b", RegexOptions.IgnoreCase);
 
             // =========================
             // 3️⃣ EXTRACT HOUR AND MINUTES
             // =========================
-            var hourMatch = Regex.Match(time, @"(\d{1,2})(?::(\d{2}))?");
-            if (!hourMatch.Success)
+            var timeMatch = Regex.Match(time, @"(\d{1,2})(?::(\d{2}))?");
+            
+            if (!timeMatch.Success)
+            {
+                Console.WriteLine($"❌ COULD NOT PARSE TIME: '{time}'");
                 return "";
+            }
 
-            int hourOnly = int.Parse(hourMatch.Groups[1].Value);
-            string minutesPart = hourMatch.Groups[2].Success ? hourMatch.Groups[2].Value : "00";
+            int hourOnly = int.Parse(timeMatch.Groups[1].Value);
+            string minutesPart = timeMatch.Groups[2].Success ? timeMatch.Groups[2].Value : "00";
+
+            Console.WriteLine($"🔢 EXTRACTED: Hour={hourOnly}, Minutes={minutesPart}");
 
             // =========================
-            // 4️⃣ HANDLE 24H FORMAT
+            // 4️⃣ HANDLE 24-HOUR FORMAT
             // =========================
             if (hourOnly >= 13 && hourOnly <= 23)
             {
                 hourOnly -= 12;
-                return $"{hourOnly}:{minutesPart} PM";
+                var result = $"{hourOnly}:{minutesPart} PM";
+                Console.WriteLine($"✅ 24H FORMAT: {result}");
+                return result;
             }
+            
             if (hourOnly == 0)
-                return $"12:{minutesPart} AM";
+            {
+                var result = $"12:{minutesPart} AM";
+                Console.WriteLine($"✅ MIDNIGHT: {result}");
+                return result;
+            }
 
             // =========================
             // 5️⃣ APPLY CONTEXT AM/PM
             // =========================
             if (contextHasPM)
-                return $"{hourOnly}:{minutesPart} PM";
+            {
+                var result = $"{hourOnly}:{minutesPart} PM";
+                Console.WriteLine($"✅ CONTEXT PM: {result}");
+                return result;
+            }
+            
             if (contextHasAM)
-                return $"{hourOnly}:{minutesPart} AM";
+            {
+                var result = $"{hourOnly}:{minutesPart} AM";
+                Console.WriteLine($"✅ CONTEXT AM: {result}");
+                return result;
+            }
 
             // =========================
-            // 6️⃣ SMART INFERENCE (ONLY IF MINUTES=00)
+            // 6️⃣ SMART INFERENCE
             // =========================
-            string inferredPeriod = "AM";
-            if (minutesPart == "00")
-                inferredPeriod = InferPeriod(hourOnly, context);
-
-            return $"{hourOnly}:{minutesPart} {inferredPeriod}";
+            string inferredPeriod = InferPeriod(hourOnly, minutesPart, context);
+            var finalResult = $"{hourOnly}:{minutesPart} {inferredPeriod}";
+            Console.WriteLine($"✅ INFERRED: {finalResult}");
+            return finalResult;
         }
 
         // ==================================================
-        // SMART AM/PM INFERENCE
+        // 🔥 SMART AM/PM INFERENCE - ENHANCED
         // ==================================================
-        private static string InferPeriod(int hour, string context)
+        private static string InferPeriod(int hour, string minutes, string context)
         {
-            // ========== MORNING ==========
-            if (Has(context, "subah", "morning", "savere", "सुबह"))
+            Console.WriteLine($"🤔 INFERRING PERIOD: Hour={hour}, Minutes={minutes}");
+
+            // ========== EXPLICIT TIME CONTEXT ==========
+            
+            // Morning indicators
+            if (Has(context, "subah", "subhe", "morning", "savere", "suvere", "सुबह", "सवेरे", "dawn", "breakfast", "nashta", "नाश्ता"))
             {
-                if (hour >= 1 && hour <= 11) return "AM";
+                if (hour >= 5 && hour <= 11)
+                {
+                    Console.WriteLine("→ Morning context: AM");
+                    return "AM";
+                }
             }
 
-            // ========== AFTERNOON ==========
-            if (Has(context, "dopahar", "afternoon", "दोपहर", "noon", "lunch"))
+            // Afternoon indicators
+            if (Has(context, "dopahar", "afternoon", "दोपहर", "noon", "lunch", "दोपहर की", "दुपहर"))
             {
-                if (hour == 12 || (hour >= 1 && hour <= 4)) return "PM";
+                if (hour == 12)
+                {
+                    Console.WriteLine("→ Noon context: PM");
+                    return "PM";
+                }
+                if (hour >= 1 && hour <= 4)
+                {
+                    Console.WriteLine("→ Afternoon context: PM");
+                    return "PM";
+                }
             }
 
-            // ========== EVENING ==========
-            if (Has(context, "shaam", "sham", "evening", "शाम"))
+            // Evening indicators (ENHANCED - added "ko", "baad")
+            if (Has(context, "shaam", "sham", "evening", "शाम", "tea", "chai", "ko", "को", "baad", "बाद"))
             {
-                if (hour >= 5 && hour <= 9) return "PM";
-                if (hour >= 1 && hour <= 4) return "PM";
+                if (hour >= 4 && hour <= 11)
+                {
+                    Console.WriteLine("→ Evening context: PM");
+                    return "PM";
+                }
             }
 
-            // ========== NIGHT ==========
-            if (Has(context, "raat", "night", "रात", "midnight"))
+            // Night indicators
+            if (Has(context, "raat", "night", "रात", "midnight", "dinner", "late", "रात को", "रात में"))
             {
-                if (hour >= 1 && hour <= 5) return "AM";
-                if (hour >= 9 && hour <= 11) return "PM";
-                if (hour == 12) return "AM";
+                if (hour >= 7 && hour <= 11)
+                {
+                    Console.WriteLine("→ Night context: PM");
+                    return "PM";
+                }
+                if (hour >= 1 && hour <= 5)
+                {
+                    Console.WriteLine("→ Late night context: AM");
+                    return "AM";
+                }
+                if (hour == 12)
+                {
+                    Console.WriteLine("→ Midnight context: AM");
+                    return "AM";
+                }
             }
 
-            // DEFAULT LOGIC
-            if (hour == 12) return "PM";
-            if (hour >= 1 && hour <= 5) return "AM";
+            // ========== BUSINESS HOURS CONTEXT ==========
+            
+            // Office/work hours (typically PM)
+            if (Has(context, "office", "work", "meeting", "conference", "call", "appointment", "कार्यालय", "मीटिंग"))
+            {
+                if (hour >= 2 && hour <= 7)
+                {
+                    Console.WriteLine("→ Business hours: PM");
+                    return "PM";
+                }
+            }
+
+            // ========== DEFAULT LOGIC BY HOUR ==========
+            
+            // 12 - Always assume noon (PM) unless explicitly night
+            if (hour == 12)
+            {
+                Console.WriteLine("→ Default 12: PM (noon)");
+                return "PM";
+            }
+
+            // 1-5 - Could be early morning or afternoon/evening
+            if (hour >= 1 && hour <= 5)
+            {
+                // If any night/late words, assume AM (late night/early morning)
+                if (Has(context, "night", "raat", "late", "early", "dawn", "रात", "देर"))
+                {
+                    Console.WriteLine("→ Default 1-5 with night context: AM");
+                    return "AM";
+                }
+                // Otherwise, likely afternoon/evening
+                Console.WriteLine("→ Default 1-5: PM");
+                return "PM";
+            }
+
+            // 6-8 - Could be morning or evening
             if (hour >= 6 && hour <= 8)
             {
-                if (Has(context, "baad", "after", "office", "work", "evening")) return "PM";
+                // Check for evening/office indicators
+                if (Has(context, "evening", "shaam", "after", "office", "work", "tea", "dinner", "baad", "को"))
+                {
+                    Console.WriteLine("→ Default 6-8 with evening context: PM");
+                    return "PM";
+                }
+                // Default to morning
+                Console.WriteLine("→ Default 6-8: AM");
                 return "AM";
             }
-            if (hour >= 9 && hour <= 11) return "AM";
 
+            // 9-11 - Usually morning unless explicitly evening/night
+            if (hour >= 9 && hour <= 11)
+            {
+                // Unless explicitly evening/night
+                if (Has(context, "evening", "night", "shaam", "raat", "dinner", "late", "को", "baad"))
+                {
+                    Console.WriteLine("→ Default 9-11 with evening context: PM");
+                    return "PM";
+                }
+                Console.WriteLine("→ Default 9-11: AM");
+                return "AM";
+            }
+
+            // Fallback
+            Console.WriteLine("→ Fallback: PM");
             return "PM";
         }
 
         // ==================================================
-        // TIME RANGE VALIDATION
+        // TIME RANGE VALIDATION - ENHANCED
         // ==================================================
         public static bool IsValidTimeRange(string startTime, string endTime)
         {
@@ -135,11 +259,14 @@ namespace AiMeetingBackend.Helpers
                 if (!start.HasValue || !end.HasValue)
                     return false;
 
+                // If end is before start, assume it's next day (overnight meeting)
                 if (end <= start)
                     end = end.Value.AddDays(1);
 
                 var duration = end.Value - start.Value;
-                return duration.TotalMinutes >= 15 && duration.TotalHours <= 12;
+                
+                // Meeting should be between 15 minutes and 24 hours
+                return duration.TotalMinutes >= 15 && duration.TotalHours <= 24;
             }
             catch
             {
@@ -148,17 +275,20 @@ namespace AiMeetingBackend.Helpers
         }
 
         // ==================================================
-        // PARSE TIME STRING TO DATETIME
+        // PARSE TIME STRING TO DATETIME - ENHANCED
         // ==================================================
         private static DateTime? ParseTime(string time)
         {
-            if (string.IsNullOrWhiteSpace(time)) return null;
+            if (string.IsNullOrWhiteSpace(time)) 
+                return null;
 
             try
             {
                 var formats = new[]
                 {
-                    "h:mm tt", "hh:mm tt", "h tt", "hh tt", "H:mm", "HH:mm", "h:mmtt", "hh:mmtt"
+                    "h:mm tt", "hh:mm tt", "h tt", "hh tt", 
+                    "H:mm", "HH:mm", "h:mmtt", "hh:mmtt",
+                    "h:mm", "hh:mm", "h.mm tt", "hh.mm tt"
                 };
 
                 foreach (var format in formats)
@@ -174,7 +304,9 @@ namespace AiMeetingBackend.Helpers
                     }
                 }
 
-                if (DateTime.TryParse(time, out var parsed)) return parsed;
+                // Last resort: try general parse
+                if (DateTime.TryParse(time, out var parsed)) 
+                    return parsed;
             }
             catch { }
 
@@ -187,22 +319,28 @@ namespace AiMeetingBackend.Helpers
         public static string To24HourFormat(string time12h)
         {
             var parsed = ParseTime(time12h);
-            if (!parsed.HasValue) return "";
+            if (!parsed.HasValue) 
+                return "";
+            
             return parsed.Value.ToString("HH:mm");
         }
 
         // ==================================================
-        // MEETING DURATION
+        // MEETING DURATION - ENHANCED FOR OVERNIGHT
         // ==================================================
         public static TimeSpan? GetDuration(string startTime, string endTime)
         {
             var start = ParseTime(startTime);
             var end = ParseTime(endTime);
 
-            if (!start.HasValue || !end.HasValue) return null;
+            if (!start.HasValue || !end.HasValue) 
+                return null;
 
             var duration = end.Value - start.Value;
-            if (duration.TotalMinutes < 0) duration = duration.Add(TimeSpan.FromDays(1));
+            
+            // If negative, assume next day (overnight meeting)
+            if (duration.TotalMinutes < 0) 
+                duration = duration.Add(TimeSpan.FromDays(1));
 
             return duration;
         }
@@ -212,11 +350,14 @@ namespace AiMeetingBackend.Helpers
         // ==================================================
         private static bool Has(string text, params string[] keywords)
         {
-            if (string.IsNullOrWhiteSpace(text)) return false;
+            if (string.IsNullOrWhiteSpace(text)) 
+                return false;
 
             foreach (var keyword in keywords)
+            {
                 if (text.Contains(keyword, StringComparison.OrdinalIgnoreCase))
                     return true;
+            }
 
             return false;
         }
