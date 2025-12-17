@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -18,7 +20,7 @@ namespace AiMeetingBackend.Helpers
         }
 
         // ==================================================
-        // MAIN ENTRY POINT
+        // 🔥 IMPROVED MAIN ENTRY POINT
         // ==================================================
         public static string ToRoman(string input)
         {
@@ -26,9 +28,19 @@ namespace AiMeetingBackend.Helpers
                 return "";
 
             // Remove common titles (noise)
-            input = Regex.Replace(input, @"\b(Mr|Mrs|Ms|Dr)\.?\b", "", RegexOptions.IgnoreCase);
+            input = Regex.Replace(input, @"\b(Mr|Mrs|Ms|Dr|Shri|Sri)\.?\s*", "", RegexOptions.IgnoreCase);
 
-            var words = input.Split(' ');
+            // 🔥 CHECK IF NAME IS ALREADY IN ENGLISH
+            // If no Hindi characters found, just clean and return
+            if (!ContainsHindi(input))
+            {
+                // Clean up and capitalize properly
+                input = Regex.Replace(input, @"\s+", " ").Trim();
+                return CapitalizeWords(input);
+            }
+
+            // Process mixed or Hindi names
+            var words = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             var resultWords = new List<string>();
 
             foreach (var word in words)
@@ -37,10 +49,11 @@ namespace AiMeetingBackend.Helpers
                 if (string.IsNullOrEmpty(trimmed))
                     continue;
 
+                // If word has Hindi, transliterate it
                 if (ContainsHindi(trimmed))
                     resultWords.Add(ToRomanWord(trimmed));
                 else
-                    resultWords.Add(trimmed);
+                    resultWords.Add(trimmed); // Keep English as-is
             }
 
             var result = string.Join(" ", resultWords);
@@ -57,7 +70,7 @@ namespace AiMeetingBackend.Helpers
             var map = new Dictionary<string, string>
             {
                 // ---- SPECIAL CONJUNCTS ----
-                ["श्री"] = "shri",
+                ["श्री"] = "Shri",
                 ["क्ष"] = "ksh",
                 ["ज्ञ"] = "gya",
                 ["त्र"] = "tr",
@@ -72,26 +85,32 @@ namespace AiMeetingBackend.Helpers
                 ["च"] = "ch", ["छ"] = "chh", ["ज"] = "j", ["झ"] = "jh",
                 ["ट"] = "t", ["ठ"] = "th", ["ड"] = "d", ["ढ"] = "dh",
                 ["त"] = "t", ["थ"] = "th", ["द"] = "d", ["ध"] = "dh",
-                ["न"] = "n",
+                ["न"] = "n", ["ण"] = "n",
                 ["प"] = "p", ["फ"] = "ph", ["ब"] = "b", ["भ"] = "bh",
                 ["म"] = "m",
-                ["य"] = "y", ["र"] = "r", ["ल"] = "l", ["व"] = "v",
+                ["य"] = "y", ["र"] = "r", ["ल"] = "l", ["व"] = "v", ["ळ"] = "l",
                 ["श"] = "sh", ["ष"] = "sh", ["स"] = "s",
                 ["ह"] = "h",
 
-                // ---- MATRAS ----
-                ["ा"] = "a",
-                ["ि"] = "i", ["ी"] = "ee",
-                ["ु"] = "u", ["ू"] = "oo",
+                // ---- MATRAS (vowel signs) ----
+                ["ा"] = "a",    // ा makes 'aa' sound but we write as 'a' for natural spelling
+                ["ि"] = "i", 
+                ["ी"] = "i",    // ी makes 'ee' but we write as 'i' (Rajesh not Rajeesh)
+                ["ु"] = "u", 
+                ["ू"] = "u",    // ू makes 'oo' but we write as 'u' 
                 ["ृ"] = "ri",
-                ["े"] = "e", ["ै"] = "ai",
-                ["ो"] = "o", ["ौ"] = "au",
+                ["े"] = "e", 
+                ["ै"] = "ai",
+                ["ो"] = "o", 
+                ["ौ"] = "au",
+                ["ॉ"] = "o",    // ऑ candra o
+                ["्य"] = "ya",  // य् + vowel
 
-                // ---- MODIFIERS (FIXED – NO DUPLICATES) ----
+                // ---- MODIFIERS ----
                 ["ं"] = "n",   // anusvara
                 ["ँ"] = "n",   // chandrabindu
-                ["ः"] = "h",
-                ["्"] = ""     // halant
+                ["ः"] = "h",   // visarga
+                ["्"] = ""     // halant (removes inherent 'a')
             };
 
             var sb = new StringBuilder();
@@ -101,7 +120,7 @@ namespace AiMeetingBackend.Helpers
             {
                 bool matched = false;
 
-                // Try 2-char combinations first
+                // Try 2-char combinations first (conjuncts)
                 if (i + 1 < word.Length)
                 {
                     var two = word.Substring(i, 2);
@@ -114,6 +133,7 @@ namespace AiMeetingBackend.Helpers
                     }
                 }
 
+                // Try single char
                 var one = word[i].ToString();
                 if (map.ContainsKey(one))
                 {
@@ -139,18 +159,23 @@ namespace AiMeetingBackend.Helpers
         }
 
         // ==================================================
-        // SMART CAPITALIZATION
+        // 🔥 SMART CAPITALIZATION (PRESERVES ENGLISH NAMES)
         // ==================================================
         private static string CapitalizeWords(string text)
         {
-            var words = text.Split(' ');
+            if (string.IsNullOrWhiteSpace(text))
+                return "";
+
+            var words = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            
             for (int i = 0; i < words.Length; i++)
             {
                 if (words[i].Length == 0) continue;
 
                 var lower = words[i].ToLower();
 
-                if (lower == "shri")
+                // Special case for common Indian titles/names
+                if (lower == "shri" || lower == "sri")
                     words[i] = "Shri";
                 else if (lower == "kumar")
                     words[i] = "Kumar";
@@ -158,11 +183,36 @@ namespace AiMeetingBackend.Helpers
                     words[i] = "Singh";
                 else if (lower == "sharma")
                     words[i] = "Sharma";
+                else if (lower == "verma")
+                    words[i] = "Verma";
+                else if (lower == "gupta")
+                    words[i] = "Gupta";
+                // 🔥 Just capitalize first letter for all other names
                 else
-                    words[i] = char.ToUpper(words[i][0]) + words[i].Substring(1);
+                    words[i] = char.ToUpper(words[i][0]) + words[i].Substring(1).ToLower();
             }
 
             return string.Join(" ", words);
+        }
+
+        // ==================================================
+        // 🔥 NEW: CLEAN NAME (REMOVE EXTRA SPACES, TRIM)
+        // ==================================================
+        public static string CleanName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return "";
+
+            // Remove extra spaces
+            name = Regex.Replace(name, @"\s+", " ").Trim();
+
+            // Remove titles
+            name = Regex.Replace(name, @"^(Mr|Mrs|Ms|Dr|Shri|Sri)\.?\s+", "", RegexOptions.IgnoreCase);
+
+            // Remove trailing punctuation
+            name = name.TrimEnd('.', ',', '!', '?');
+
+            return name;
         }
     }
 }

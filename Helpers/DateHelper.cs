@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -30,6 +31,27 @@ namespace AiMeetingBackend.Helpers
 
             if (ContainsAny(input, "parso", "parson", "day after tomorrow", "परसों"))
                 return Format(today.AddDays(2));
+
+            // ==================================================
+            // 🔥 AFTER X DAYS (ENGLISH + HINDI MIXED)
+            // ==================================================
+            var afterMatch = Regex.Match(
+                input,
+                @"(after|आफ्टर|baad|बाद)\s+(one|two|three|four|five|six|seven|1|2|3|4|5|6|7|एक|दो|तीन|टू|ون)\s+(day|days|din|दिन|डेज)",
+                RegexOptions.IgnoreCase
+            );
+
+            if (afterMatch.Success)
+            {
+                string numStr = afterMatch.Groups[2].Value.ToLower();
+                int days = ConvertWordToNumber(numStr);
+                
+                if (days > 0)
+                {
+                    Console.WriteLine($"📅 RESOLVED 'after {days} days' → {Format(today.AddDays(days))}");
+                    return Format(today.AddDays(days));
+                }
+            }
 
             // ==================================================
             // 🔥 ABSOLUTE DATE: "22 December 2025" or "22 Dec 2025"
@@ -68,7 +90,7 @@ namespace AiMeetingBackend.Helpers
             }
 
             // ==================================================
-            // 🔥 ABSOLUTE DATE WITHOUT YEAR: "22 December" (assumes current/next year)
+            // 🔥 ABSOLUTE DATE WITHOUT YEAR: "22 December"
             // ==================================================
             var dateNoYearMatch = Regex.Match(
                 input,
@@ -95,36 +117,17 @@ namespace AiMeetingBackend.Helpers
                         int year = today.Year;
                         var date = new DateTime(year, monthMap[monthStr], day);
                         
-                        // If date is in the past, use next year
                         if (date < today)
                             date = date.AddYears(1);
                         
                         return Format(date);
                     }
-                    catch
-                    {
-                        // Invalid date
-                    }
+                    catch { }
                 }
             }
 
             // ==================================================
-            // 🔥 AFTER X DAYS / DIN BAAD
-            // ==================================================
-            var afterMatch = Regex.Match(
-                input,
-                @"(\d+)\s*(din|day|days)\s*(baad|after|later)?",
-                RegexOptions.IgnoreCase
-            );
-
-            if (afterMatch.Success)
-            {
-                int days = int.Parse(afterMatch.Groups[1].Value);
-                return Format(today.AddDays(days));
-            }
-
-            // ==================================================
-            // 🔥 WEEKDAY LOGIC (NEXT / THIS / COMING / AGLE)
+            // 🔥 WEEKDAY LOGIC
             // ==================================================
             var weekdayMatch = Regex.Match(
                 input,
@@ -139,18 +142,13 @@ namespace AiMeetingBackend.Helpers
                 bool isComing = input.Contains("coming");
 
                 DayOfWeek targetDay = MapWeekday(weekdayMatch.Groups[2].Value);
-                DateTime resolved = GetNextWeekday(
-                    today,
-                    targetDay,
-                    isNext,
-                    isThis || isComing
-                );
+                DateTime resolved = GetNextWeekday(today, targetDay, isNext, isThis || isComing);
 
                 return Format(resolved);
             }
 
             // ==================================================
-            // 🔥 NUMERIC DATES (15/12/2025, 15-12-25, 15.12.2025)
+            // 🔥 NUMERIC DATES
             // ==================================================
             if (DateTime.TryParseExact(
                 input,
@@ -159,32 +157,44 @@ namespace AiMeetingBackend.Helpers
                     "d/M/yyyy", "dd/MM/yyyy",
                     "d-M-yyyy", "dd-MM-yyyy",
                     "d.M.yyyy", "dd.MM.yyyy",
-                    "d/M/yy",   "dd/MM/yy",
-                    "d-M-yy",   "dd-MM-yy"
+                    "d/M/yy", "dd/MM/yy",
+                    "d-M-yy", "dd-MM-yy"
                 },
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.None,
                 out var numericDate))
             {
-                // Handle 2-digit years
                 if (numericDate.Year < 100)
                     numericDate = numericDate.AddYears(2000);
 
                 return Format(numericDate);
             }
 
-            // ==================================================
-            // 🔒 SAFE FAIL — NEVER GUESS WRONG DATE
-            // ==================================================
             return "";
         }
 
         // ==================================================
-        // 🔧 HELPERS
+        // 🔥 NEW: CONVERT WORD TO NUMBER
+        // ==================================================
+        private static int ConvertWordToNumber(string word)
+        {
+            var wordMap = new Dictionary<string, int>
+            {
+                {"one", 1}, {"two", 2}, {"three", 3}, {"four", 4},
+                {"five", 5}, {"six", 6}, {"seven", 7},
+                {"1", 1}, {"2", 2}, {"3", 3}, {"4", 4},
+                {"5", 5}, {"6", 6}, {"7", 7},
+                {"एक", 1}, {"दो", 2}, {"तीन", 3}, {"टू", 2}, {"ون", 1}
+            };
+
+            return wordMap.ContainsKey(word) ? wordMap[word] : 0;
+        }
+
+        // ==================================================
+        // HELPER METHODS
         // ==================================================
         private static string NormalizeMonths(string input)
         {
-            // English month normalization
             input = Regex.Replace(input, @"\bjanuary\b", "jan", RegexOptions.IgnoreCase);
             input = Regex.Replace(input, @"\bfebruary\b", "feb", RegexOptions.IgnoreCase);
             input = Regex.Replace(input, @"\bmarch\b", "mar", RegexOptions.IgnoreCase);
@@ -197,7 +207,6 @@ namespace AiMeetingBackend.Helpers
             input = Regex.Replace(input, @"\bnovember\b", "nov", RegexOptions.IgnoreCase);
             input = Regex.Replace(input, @"\bdecember\b", "dec", RegexOptions.IgnoreCase);
 
-            // Hindi month normalization (Devanagari to English)
             input = input.Replace("जनवरी", "jan");
             input = input.Replace("फ़रवरी", "feb");
             input = input.Replace("फरवरी", "feb");
@@ -211,26 +220,21 @@ namespace AiMeetingBackend.Helpers
             input = input.Replace("अक्टूबर", "oct");
             input = input.Replace("नवंबर", "nov");
             input = input.Replace("दिसंबर", "dec");
+            input = input.Replace("दिसमबर", "dec");
 
             return input;
         }
 
-        private static DateTime GetNextWeekday(
-            DateTime start,
-            DayOfWeek target,
-            bool forceNext,
-            bool allowSameWeek)
+        private static DateTime GetNextWeekday(DateTime start, DayOfWeek target, bool forceNext, bool allowSameWeek)
         {
             int daysToAdd = ((int)target - (int)start.DayOfWeek + 7) % 7;
 
-            // If today is the target day
             if (daysToAdd == 0)
             {
                 if (!allowSameWeek)
-                    daysToAdd = 7; // Skip to next week
+                    daysToAdd = 7;
             }
 
-            // If "next" is explicitly mentioned
             if (forceNext && daysToAdd < 7)
                 daysToAdd += 7;
 
@@ -269,9 +273,6 @@ namespace AiMeetingBackend.Helpers
             return false;
         }
 
-        // ==================================================
-        // 🔥 VALIDATION METHOD
-        // ==================================================
         public static bool IsValidDate(string dateStr)
         {
             if (string.IsNullOrWhiteSpace(dateStr))
@@ -287,7 +288,6 @@ namespace AiMeetingBackend.Helpers
                 return false;
             }
 
-            // Date should be within reasonable range (today to 1 year ahead)
             return date >= DateTime.Today && date <= DateTime.Today.AddYears(1);
         }
     }

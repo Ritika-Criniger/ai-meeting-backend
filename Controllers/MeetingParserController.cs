@@ -52,11 +52,16 @@ namespace AiMeetingBackend.Controllers
             // 3️⃣ NORMALIZATION (HELPERS)
             // ===============================
 
-            // 🔹 NAME → Always Roman English
+            // 🔹 NAME → Clean and normalize
             if (!string.IsNullOrWhiteSpace(aiResult.ClientName))
             {
-                aiResult.ClientName =
-                    HindiRomanTransliterator.ToRoman(aiResult.ClientName);
+                // First clean the name
+                aiResult.ClientName = HindiRomanTransliterator.CleanName(aiResult.ClientName);
+                
+                // Then transliterate if Hindi is present
+                aiResult.ClientName = HindiRomanTransliterator.ToRoman(aiResult.ClientName);
+                
+                Console.WriteLine($"✅ FINAL NAME: {aiResult.ClientName}");
             }
 
             // 🔹 DATE
@@ -123,27 +128,28 @@ namespace AiMeetingBackend.Controllers
 @"You are a meeting information extractor. Extract ONLY the following fields from the user's text and return VALID JSON.
 
 Fields to extract:
-- clientName: Person's name (Hindi or English)
-- mobileNumber: 10-digit phone number
-- meetingDate: Date phrase as spoken (e.g., ""tomorrow"", ""22 December 2025"")
-- startTime: Start time hour only (e.g., ""7"", ""10"")
-- endTime: End time hour only (e.g., ""8"", ""11"")
+- clientName: FULL person's name EXACTLY as spoken (preserve Hindi/English spelling)
+- mobileNumber: 10-digit phone number (digits only)
+- meetingDate: Date phrase EXACTLY as spoken (e.g., ""tomorrow"", ""22 December 2025"", ""after 2 days"", ""आफ्टर टू डेज"")
+- startTime: Start time with AM/PM if mentioned (e.g., ""7"", ""7 PM"", ""7 पीम"")
+- endTime: End time with AM/PM if mentioned (e.g., ""8"", ""8 PM"", ""8 पीम"")
 
-Rules:
-1. Extract ONLY what is explicitly mentioned
-2. Do NOT guess or infer
-3. Use empty string """" if not found
-4. Return ONLY valid JSON, no other text
-5. Keep numbers as strings
+CRITICAL RULES:
+1. For clientName: Extract COMPLETE name EXACTLY as written/spoken
+   - ""Akash Daima"" → ""Akash Daima""
+   - ""राजेश धनोत्या"" → ""राजेश धनोत्या"" (preserve Devanagari exactly)
+2. For date: Keep EXACTLY as spoken, including mixed Hindi-English
+   - ""आफ्टर टू डेज"" → ""आफ्टर टू डेज""
+   - ""after 2 days"" → ""after 2 days""
+3. For time: If PM/AM mentioned, include it
+   - ""7 पीम"" → ""7 PM""
+   - ""7 pm"" → ""7 PM""
+4. Use empty string """" if not found
+5. Return ONLY valid JSON
 
-Example output:
-{
-  ""clientName"": ""Amit Verma"",
-  ""mobileNumber"": ""6267388250"",
-  ""meetingDate"": ""22 December 2025"",
-  ""startTime"": ""7"",
-  ""endTime"": ""8""
-}"
+Example:
+Input: ""राजेश धनोत्या के साथ मीटिंग फिक्स करो आफ्टर टू डेज 7 पीम टू 8 पीम""
+Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumber"": """", ""meetingDate"": ""आफ्टर टू डेज"", ""startTime"": ""7 PM"", ""endTime"": ""8 PM""}"
                     },
                     new
                     {
@@ -215,7 +221,7 @@ Example output:
 
                 var result = JsonSerializer.Deserialize<AiResult>(json, options);
                 
-                Console.WriteLine($"✅ PARSED: Name={result?.ClientName}, Mobile={result?.MobileNumber}, Date={result?.MeetingDate}, Start={result?.StartTime}, End={result?.EndTime}");
+                Console.WriteLine($"✅ PARSED RAW: Name='{result?.ClientName}', Mobile={result?.MobileNumber}, Date={result?.MeetingDate}, Start={result?.StartTime}, End={result?.EndTime}");
                 
                 return result ?? new AiResult();
             }
@@ -281,6 +287,18 @@ Example output:
                     result.MeetingDate = "today";
                     Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
                 }
+                // 🔥 NEW: Handle "after X days" in both English and Hindi mixed
+                else if (Regex.IsMatch(text, @"(after|आफ्टर)\s+(two|2|टू)\s+(days|din|डेज|दिन)", RegexOptions.IgnoreCase))
+                {
+                    result.MeetingDate = "after 2 days";
+                    Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
+                }
+                else if (Regex.IsMatch(text, @"(after|आफ्टर)\s+(\d+)\s+(days|din|डेज|दिन)", RegexOptions.IgnoreCase))
+                {
+                    var match = Regex.Match(text, @"(after|आफ्टर)\s+(\d+)\s+(days|din|डेज|दिन)", RegexOptions.IgnoreCase);
+                    result.MeetingDate = $"after {match.Groups[2].Value} days";
+                    Console.WriteLine($"📅 REGEX FOUND DATE: {result.MeetingDate}");
+                }
                 else
                 {
                     // Look for date patterns like "22 December 2025"
@@ -296,21 +314,41 @@ Example output:
             // Time range - look for patterns like "7 se 8", "10 pm to 11 pm", etc.
             if (string.IsNullOrWhiteSpace(result.StartTime) || string.IsNullOrWhiteSpace(result.EndTime))
             {
-                // Pattern: "7 se 8", "10 to 11", "7 बजे से 8 बजे"
-                var timeMatch = Regex.Match(text, @"(\d{1,2})\s*(?:बजे\s*)?(?:se|to|से)\s*(\d{1,2})", RegexOptions.IgnoreCase);
+                // 🔥 NEW: Handle "7 pm to 8 pm" or "7 पीम टू 8 पीम"
+                var pmTimeMatch = Regex.Match(text, @"(\d{1,2})\s*(pm|पीम|पी\.?म\.?)\s*(to|से|टू)\s*(\d{1,2})\s*(pm|पीम|पी\.?म\.?)", RegexOptions.IgnoreCase);
                 
-                if (timeMatch.Success)
+                if (pmTimeMatch.Success)
                 {
                     if (string.IsNullOrWhiteSpace(result.StartTime))
                     {
-                        result.StartTime = timeMatch.Groups[1].Value;
-                        Console.WriteLine($"🕐 REGEX FOUND START TIME: {result.StartTime}");
+                        result.StartTime = pmTimeMatch.Groups[1].Value + " PM";
+                        Console.WriteLine($"🕐 REGEX FOUND START TIME (PM): {result.StartTime}");
                     }
 
                     if (string.IsNullOrWhiteSpace(result.EndTime))
                     {
-                        result.EndTime = timeMatch.Groups[2].Value;
-                        Console.WriteLine($"🕐 REGEX FOUND END TIME: {result.EndTime}");
+                        result.EndTime = pmTimeMatch.Groups[4].Value + " PM";
+                        Console.WriteLine($"🕐 REGEX FOUND END TIME (PM): {result.EndTime}");
+                    }
+                }
+                else
+                {
+                    // Pattern: "7 se 8", "10 to 11", "7 बजे से 8 बजे"
+                    var timeMatch = Regex.Match(text, @"(\d{1,2})\s*(?:बजे\s*)?(?:se|to|से|टू)\s*(\d{1,2})", RegexOptions.IgnoreCase);
+                    
+                    if (timeMatch.Success)
+                    {
+                        if (string.IsNullOrWhiteSpace(result.StartTime))
+                        {
+                            result.StartTime = timeMatch.Groups[1].Value;
+                            Console.WriteLine($"🕐 REGEX FOUND START TIME: {result.StartTime}");
+                        }
+
+                        if (string.IsNullOrWhiteSpace(result.EndTime))
+                        {
+                            result.EndTime = timeMatch.Groups[2].Value;
+                            Console.WriteLine($"🕐 REGEX FOUND END TIME: {result.EndTime}");
+                        }
                     }
                 }
             }
