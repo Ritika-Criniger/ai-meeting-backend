@@ -50,9 +50,6 @@ namespace AiMeetingBackend.Controllers
                 // 🔥 GROQ WHISPER MODEL
                 form.Add(new StringContent("whisper-large-v3"), "model");
 
-                form.Add(new StringContent("en"), "language");
-
-
                 var response = await http.PostAsync(
                     "https://api.groq.com/openai/v1/audio/transcriptions",
                     form
