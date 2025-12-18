@@ -61,22 +61,9 @@ namespace AiMeetingBackend.Controllers
             Console.WriteLine($"📝 INPUT TEXT: {userText}");
 
             // ===============================
-            // 1️⃣ CALL GPT-4 MINI (ENHANCED PROMPT + NAME SPAN)
+            // 1️⃣ CALL GPT-4 MINI (ENHANCED PROMPT)
             // ===============================
             var aiResult = await CallOpenAIAsync(userText, openaiKey);
-
-            // If model provided a valid span inside the original text,
-            // prefer that exact substring as the raw client name before normalization.
-            if (!string.IsNullOrWhiteSpace(aiResult.ClientNameSpanText) &&
-                aiResult.ClientNameSpanStart >= 0 &&
-                aiResult.ClientNameSpanEnd > aiResult.ClientNameSpanStart &&
-                aiResult.ClientNameSpanEnd <= userText.Length)
-            {
-                var spanLength = aiResult.ClientNameSpanEnd - aiResult.ClientNameSpanStart;
-                var rawNameFromSpan = userText.Substring(aiResult.ClientNameSpanStart, spanLength).Trim();
-                Console.WriteLine($"🎯 USING NAME SPAN: '{rawNameFromSpan}' (from indices {aiResult.ClientNameSpanStart}-{aiResult.ClientNameSpanEnd})");
-                aiResult.ClientName = rawNameFromSpan;
-            }
 
             // ===============================
             // 2️⃣ REGEX FALLBACK
@@ -94,9 +81,11 @@ namespace AiMeetingBackend.Controllers
                 aiResult.ClientName = HindiRomanTransliterator.CleanName(aiResult.ClientName);
                 Console.WriteLine($"  Step 1 - Cleaned: '{aiResult.ClientName}'");
 
-                var hasHindiChars = HindiRomanTransliterator.ContainsHindi(aiResult.ClientName);
+                // If the overall sentence has any Hindi characters, treat it as Hindi flow,
+                // otherwise trust the model's English name and just clean + capitalize it.
+                bool sentenceHasHindi = HindiRomanTransliterator.ContainsHindi(userText);
 
-                if (hasHindiChars)
+                if (sentenceHasHindi)
                 {
                     // 🔤 HINDI / MIXED: transliterate + Indian-specific corrections
                     aiResult.ClientName = HindiRomanTransliterator.ToRoman(aiResult.ClientName);
@@ -107,9 +96,9 @@ namespace AiMeetingBackend.Controllers
                 }
                 else
                 {
-                    // 🔤 PURE ENGLISH / ROMAN TEXT:
-                    // Do NOT run IndianNameCorrector here to avoid "bigadna" of English names.
-                    // Just apply simple capitalization, keeping Whisper/GPT output mostly as-is.
+                    // 🔤 PURE ENGLISH SENTENCE:
+                    // Do NOT try to re-guess the name from the sentence.
+                    // Just keep the model's clientName as-is with simple capitalization.
                     aiResult.ClientName = CapitalizeWordsSimple(aiResult.ClientName);
                     Console.WriteLine($"  Step 2 - English name kept with simple caps → '{aiResult.ClientName}'");
                 }
@@ -210,8 +199,8 @@ namespace AiMeetingBackend.Controllers
    - Double vowels: 'ई' → 'ee', 'ऊ' → 'oo'
 
 3. **English / Hinglish Names:** Copy EXACTLY as heard, do NOT change to a different valid name
-   - ""John Doe"", ""Ammulya Chowdhury"", ""Akshat Jain"", ""Rani Verma"", ""Nidhi Mandliya""
-   - ❌ NEVER change one valid Indian name into another (for example: do NOT change ""Akshat"" to ""Asha"" or ""Rani"" to ""Anil"")
+   - ""John Doe"", ""Ammulya Chowdhury"", ""Akshat Jain"", ""Rani Verma"", ""Nidhi Mandliya"", ""Nitesh Patidar"", ""Akash Daima""
+   - ❌ NEVER change one valid Indian name into another (for example: do NOT change ""Akshat"" to ""Asha"" or ""Rani"" to ""Anil"" or ""Nitesh Patidar"" to any other name)
 
 4. **Mobile Number:**
    - 10 digits, starts with 6/7/8/9
