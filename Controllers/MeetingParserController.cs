@@ -118,6 +118,9 @@ namespace AiMeetingBackend.Controllers
 
            // 🔥 FIXED GROQ PROMPT - Place this in your CallGroqAsync method
 
+// 🔥 SIMPLIFIED GROQ PROMPT - No transliteration needed now!
+// Replace in CallGroqAsync() method in MeetingParserController.cs
+
 var payload = new
 {
     model = "llama-3.3-70b-versatile",
@@ -128,106 +131,98 @@ var payload = new
         new
         {
             role = "system",
-            // 🔥 UPDATED GROQ PROMPT - Better handling of "5.30" format
-// Replace the system message content in CallGroqAsync() method
-
-content = @"You are an expert meeting information extractor for Indian users speaking Hindi, English, or Hinglish. Extract ONLY these fields and return VALID JSON.
+            content = @"You are an expert meeting information extractor. All input is already in English (romanized). Extract ONLY these fields and return VALID JSON.
 
 **FIELDS TO EXTRACT:**
 
-1. **clientName**: FULL person's name EXACTLY as spoken
-   - Preserve original spelling - do NOT modify English names
-   - ""Rakesh"" → ""Rakesh"" (NOT ""Raakaesha"")
+1. **clientName**: Full person's name EXACTLY as given
+   - ""Bhoomika Tekam"" → ""Bhoomika Tekam""
    - ""Nandini Jain"" → ""Nandini Jain""
-   - ""भूमिका टेकम"" → ""भूमिका टेकम"" (keep Hindi as-is)
-   - ""गौरी"" → ""गौरी"" (keep Hindi as-is)
+   - ""Gauri"" → ""Gauri""
+   - ""Rakesh Sharma"" → ""Rakesh Sharma""
    - Remove titles: Mr, Mrs, Shri, etc.
 
-2. **mobileNumber**: 10-digit Indian phone number (digits only)
-   - Extract only: ""9876543210""
+2. **mobileNumber**: 10-digit phone number (digits only)
+   - Extract: ""9876543210""
    - Ignore date/time numbers
 
 3. **meetingDate**: Date phrase EXACTLY as spoken
    - ""tomorrow"" → ""tomorrow""
    - ""kal"" → ""kal""
    - ""22 december"" → ""22 december""
-   - ""22 दिसंबर"" → ""22 दिसंबर"" (keep Hindi as-is)
-   - ""8 फरवरी"" → ""8 फरवरी""
+   - ""8 february"" → ""8 february""
+   - ""22 disember"" → ""22 december"" (fix common misspellings)
+   - ""8 farvari"" → ""8 february""
 
 4. **startTime**: Start time EXACTLY as mentioned
    - ""5 PM"" → ""5 PM""
    - ""10"" → ""10""
    - ""4:30"" → ""4:30""
-   - ""5.30"" → ""5.30"" (keep dot as-is)
+   - ""4.30"" → ""4:30"" (convert dot to colon)
 
 5. **endTime**: End time EXACTLY as mentioned
    - ""8 PM"" → ""8 PM""
    - ""5:30"" → ""5:30""
-   - ""5.30"" → ""5.30"" (keep dot as-is)
+   - ""5.30"" → ""5:30"" (convert dot to colon)
 
 **🔥 CRITICAL TIME RULES:**
 
 For ""X to Y"" or ""X se Y"":
 - Extract X → startTime
 - Extract Y → endTime
-- Do NOT add, calculate, or modify numbers
+- Do NOT add, calculate, or modify
 
 ✅ CORRECT Examples:
-Input: ""5 pm to 5.30 pm""
-Output: startTime=""5 pm"", endTime=""5.30 pm""
-
-Input: ""5 pm to 5:30 pm""
-Output: startTime=""5 pm"", endTime=""5:30 pm""
-
-Input: ""4 se 4.30""
-Output: startTime=""4"", endTime=""4.30""
-
-❌ WRONG (NEVER DO THIS):
-Input: ""5 pm to 5.30 pm""
-Wrong: startTime=""5 pm"", endTime=""30 pm"" ← DO NOT extract ""30"" alone!
-Wrong: startTime=""5 pm"", endTime=""10.30 pm"" ← DO NOT add!
-
-**KEY POINTS:**
-- ""5.30"" means 5 hours and 30 minutes, NOT 30 alone
-- ""5:30"" and ""5.30"" are the same thing
-- Extract the COMPLETE time string including both parts
+""5 pm to 5.30 pm"" → start=""5 PM"", end=""5:30 PM""
+""4 se 4:30"" → start=""4"", end=""4:30""
+""10 to 11"" → start=""10"", end=""11""
 
 **OTHER RULES:**
 
 ⚠️ NAME EXTRACTION:
-- Keep names in their original script
-- Hindi names → keep in Hindi
-- English names → keep in English
-- Do NOT transliterate or modify
+- Keep names exactly as provided
+- Remove titles only
+- Don't modify spelling
 
-⚠️ DATE EXTRACTION:
-- Keep dates in their original script
-- Hindi dates → keep in Hindi
-- English dates → keep in English
+⚠️ DATE NORMALIZATION:
+- Fix common Hindi month misspellings:
+  - ""disember"" → ""december""
+  - ""farvari"" / ""farwari"" → ""february""
+  - ""janvari"" → ""january""
+  - ""oktombar"" → ""october""
+  - ""navambar"" → ""november""
+
+⚠️ TIME NORMALIZATION:
+- Convert dots to colons: ""5.30"" → ""5:30""
 
 ⚠️ DEFAULT VALUES:
 - Use empty string """" if field not found
-- Do NOT guess or make up information
 
 **EXAMPLES:**
 
-Input: ""भूमिका टेकम""
-Output: {""clientName"": ""भूमिका टेकम"", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": """", ""endTime"": """"}
+Input: ""Bhoomika Tekam""
+Output: {""clientName"": ""Bhoomika Tekam"", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": """", ""endTime"": """"}
 
 Input: ""Nandini Jain""
 Output: {""clientName"": ""Nandini Jain"", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": """", ""endTime"": """"}
 
-Input: ""गौरी""
-Output: {""clientName"": ""गौरी"", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": """", ""endTime"": """"}
+Input: ""Gauri""
+Output: {""clientName"": ""Gauri"", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": """", ""endTime"": """"}
 
-Input: ""22 दिसंबर""
-Output: {""clientName"": """", ""mobileNumber"": """", ""meetingDate"": ""22 दिसंबर"", ""startTime"": """", ""endTime"": """"}
+Input: ""22 disember""
+Output: {""clientName"": """", ""mobileNumber"": """", ""meetingDate"": ""22 december"", ""startTime"": """", ""endTime"": """"}
+
+Input: ""8 farvari""
+Output: {""clientName"": """", ""mobileNumber"": """", ""meetingDate"": ""8 february"", ""startTime"": """", ""endTime"": """"}
 
 Input: ""5 pm to 5.30 pm""
-Output: {""clientName"": """", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": ""5 pm"", ""endTime"": ""5.30 pm""}
+Output: {""clientName"": """", ""mobileNumber"": """", ""meetingDate"": """", ""startTime"": ""5 PM"", ""endTime"": ""5:30 PM""}
 
-Input: ""Nandini Jain 8 फरवरी 5 pm to 5:30 pm""
-Output: {""clientName"": ""Nandini Jain"", ""mobileNumber"": """", ""meetingDate"": ""8 फरवरी"", ""startTime"": ""5 pm"", ""endTime"": ""5:30 pm""}
+Input: ""Rakesh Sharma 9876543210 kal 4 se 4:30""
+Output: {""clientName"": ""Rakesh Sharma"", ""mobileNumber"": ""9876543210"", ""meetingDate"": ""kal"", ""startTime"": ""4"", ""endTime"": ""4:30""}
+
+Input: ""Bhoomika Tekam 22 disember 5 pm to 5.30 pm""
+Output: {""clientName"": ""Bhoomika Tekam"", ""mobileNumber"": """", ""meetingDate"": ""22 december"", ""startTime"": ""5 PM"", ""endTime"": ""5:30 PM""}
 
 Return ONLY valid JSON, no markdown, no extra text."
         },
