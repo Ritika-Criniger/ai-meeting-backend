@@ -280,6 +280,9 @@ namespace AiMeetingBackend.Helpers
             input = input.Replace("दिसंबर", "dec");
             input = input.Replace("दिसमबर", "dec");
 
+            // Common STT misspelling for December in Hinglish
+            input = input.Replace("decembar", "dec");
+
             return input;
         }
 

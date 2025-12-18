@@ -161,6 +161,10 @@ namespace AiMeetingBackend.Controllers
             // "98765 43210" → "9876543210"
             text = Regex.Replace(text, @"(\d)\s+(\d)", "$1$2");
 
+            // Also normalize common phone‑number formatting noise:
+            // "+91-98765 43210" → "+919876543210"
+            text = Regex.Replace(text, @"(\+?\d{1,3})[-\s]+(\d)", "$1$2");
+
             // 4. Normalize common speech-to-text errors
             text = text.Replace("  ", " ");
             

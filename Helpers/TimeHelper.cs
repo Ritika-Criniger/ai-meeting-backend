@@ -151,8 +151,9 @@ namespace AiMeetingBackend.Helpers
                 }
             }
 
-            // Afternoon indicators
-            if (Has(context, "dopahar", "afternoon", "दोपहर", "noon", "lunch", "दोपहर की", "दुपहर"))
+            // Afternoon / daytime indicators
+            if (Has(context, "dopahar", "afternoon", "दोपहर", "noon", "lunch", "दोपहर की", "दुपहर",
+                     "din", "din me", "din mein", "daytime", "day time"))
             {
                 if (hour == 12)
                 {

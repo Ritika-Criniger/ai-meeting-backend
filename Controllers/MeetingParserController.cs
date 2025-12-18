@@ -45,9 +45,22 @@ namespace AiMeetingBackend.Controllers
             Console.WriteLine($"📝 INPUT TEXT: {userText}");
 
             // ===============================
-            // 1️⃣ CALL GPT-4 MINI (ENHANCED PROMPT)
+            // 1️⃣ CALL GPT-4 MINI (ENHANCED PROMPT + NAME SPAN)
             // ===============================
             var aiResult = await CallOpenAIAsync(userText, openaiKey);
+
+            // If model provided a valid span inside the original text,
+            // prefer that exact substring as the raw client name before normalization.
+            if (!string.IsNullOrWhiteSpace(aiResult.ClientNameSpanText) &&
+                aiResult.ClientNameSpanStart >= 0 &&
+                aiResult.ClientNameSpanEnd > aiResult.ClientNameSpanStart &&
+                aiResult.ClientNameSpanEnd <= userText.Length)
+            {
+                var spanLength = aiResult.ClientNameSpanEnd - aiResult.ClientNameSpanStart;
+                var rawNameFromSpan = userText.Substring(aiResult.ClientNameSpanStart, spanLength).Trim();
+                Console.WriteLine($"🎯 USING NAME SPAN: '{rawNameFromSpan}' (from indices {aiResult.ClientNameSpanStart}-{aiResult.ClientNameSpanEnd})");
+                aiResult.ClientName = rawNameFromSpan;
+            }
 
             // ===============================
             // 2️⃣ REGEX FALLBACK
@@ -175,8 +188,9 @@ namespace AiMeetingBackend.Controllers
    - 'व' → 'V' or 'W' (Verma, Vikram)
    - Double vowels: 'ई' → 'ee', 'ऊ' → 'oo'
 
-3. **English Names:** Keep as-is with proper caps
-   - ""John Doe"", ""Ammulya Chowdhury""
+3. **English / Hinglish Names:** Copy EXACTLY as heard, do NOT change to a different valid name
+   - ""John Doe"", ""Ammulya Chowdhury"", ""Akshat Jain"", ""Rani Verma"", ""Nidhi Mandliya""
+   - ❌ NEVER change one valid Indian name into another (for example: do NOT change ""Akshat"" to ""Asha"" or ""Rani"" to ""Anil"")
 
 4. **Mobile Number:**
    - 10 digits, starts with 6/7/8/9
@@ -195,7 +209,20 @@ namespace AiMeetingBackend.Controllers
    - ""shaam"", ""evening"", ""ko"", ""baad"" → PM
    - ""subah"", ""morning"" → AM
 
-**EXAMPLES:**
+8. **OUTPUT SCHEMA (IMPORTANT):**
+   You MUST return a single JSON object with these fields:
+   {
+     ""clientName"": string,
+     ""mobileNumber"": string,
+     ""meetingDate"": string,
+     ""startTime"": string,
+     ""endTime"": string,
+     ""clientNameSpanStart"": integer (0-based index in the original user text, or -1 if unknown),
+     ""clientNameSpanEnd"": integer (exclusive index, or -1 if unknown),
+     ""clientNameSpanText"": string (exact substring for the name, or empty)
+   }
+
+**EXAMPLES (DO NOT CHANGE NAMES):**
 
 Input: ""नीरज कुमावत कल शामको चार बजे""
 Output: {""clientName"": ""Neeraj Kumawat"", ""mobileNumber"": """", ""meetingDate"": ""kal"", ""startTime"": ""4"", ""endTime"": """"}
@@ -205,6 +232,12 @@ Output: {""clientName"": ""Vikrant Dhara"", ""mobileNumber"": """", ""meetingDat
 
 Input: ""Ammulya Chowdhury 8 feb 5:30 pm call 9876543210""
 Output: {""clientName"": ""Ammulya Chowdhury"", ""mobileNumber"": ""9876543210"", ""meetingDate"": ""8 feb"", ""startTime"": ""5:30 pm"", ""endTime"": """"}
+
+Input: ""Connect with Akshat Jain tomorrow evening from 4 pm to 5 pm via mobile number 9123456789""
+Output: {""clientName"": ""Akshat Jain"", ""mobileNumber"": ""9123456789"", ""meetingDate"": ""tomorrow"", ""startTime"": ""4 pm"", ""endTime"": ""5 pm""}
+
+Input: ""Schedule meeting with Rani Verma tomorrow from 5 pm to 6 pm, mobile number 6267304521""
+Output: {""clientName"": ""Rani Verma"", ""mobileNumber"": ""6267304521"", ""meetingDate"": ""tomorrow"", ""startTime"": ""5 pm"", ""endTime"": ""6 pm""}
 
 Return ONLY valid JSON."
                     },
@@ -292,12 +325,21 @@ Return ONLY valid JSON."
             // Mobile Number
             if (string.IsNullOrWhiteSpace(result.MobileNumber))
             {
-                var textNoSpaces = Regex.Replace(text, @"(\d)\s+(\d)", "$1$2");
-                var mobileMatch = Regex.Match(textNoSpaces, @"\b[6-9]\d{9}\b");
-                
+                // Collapse spaces between digits: "98765 43210" → "9876543210"
+                var digitsCollapsed = Regex.Replace(text, @"(\d)\s+(\d)", "$1$2");
+
+                // Allow optional +91 / 91 / 0 prefixes and hyphens/spaces:
+                // "+91 98765-43210", "0919876543210", "919876543210"
+                var mobileMatch = Regex.Match(
+                    digitsCollapsed,
+                    @"(?:\+?91|0)?([6-9]\d{9})",
+                    RegexOptions.IgnoreCase
+                );
+
                 if (mobileMatch.Success)
                 {
-                    result.MobileNumber = mobileMatch.Value;
+                    // Group 1 always contains the clean 10‑digit Indian mobile
+                    result.MobileNumber = mobileMatch.Groups[1].Value;
                     Console.WriteLine($"📱 REGEX FOUND MOBILE: {result.MobileNumber}");
                 }
             }
@@ -316,8 +358,9 @@ Return ONLY valid JSON."
             // Time Range
             if (string.IsNullOrWhiteSpace(result.StartTime) || string.IsNullOrWhiteSpace(result.EndTime))
             {
+                // Support Hindi + Hinglish connectors: "7 se 8", "7 sa 8", "7 to 8", "7 till 8", "7 se 8 tak"
                 var timeMatch = Regex.Match(text, 
-                    @"(\d{1,2})(?:[:\.](\d{2}))?\s*(?:pm|am|पीएम|एएम)?\s*(?:se|to|से)\s*(\d{1,2})(?:[:\.](\d{2}))?\s*(?:pm|am|पीएम|एएम)?", 
+                    @"(\d{1,2})(?:[:\.](\d{2}))?\s*(?:pm|am|पीएम|एएम)?\s*(?:se|sa|say|to|till|tak|से|तक)\s*(\d{1,2})(?:[:\.](\d{2}))?\s*(?:pm|am|पीएम|एएम)?", 
                     RegexOptions.IgnoreCase);
                 
                 if (timeMatch.Success)
@@ -389,5 +432,10 @@ Return ONLY valid JSON."
         public string StartTime { get; set; } = "";
         public string EndTime { get; set; } = "";
         public double Confidence { get; set; } = 0.95;
+
+        // Optional span information for the client name inside the original text
+        public int ClientNameSpanStart { get; set; } = -1;
+        public int ClientNameSpanEnd { get; set; } = -1;
+        public string ClientNameSpanText { get; set; } = "";
     }
 }
