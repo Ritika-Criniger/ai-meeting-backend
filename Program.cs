@@ -7,6 +7,9 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 // Controllers
 builder.Services.AddControllers();
 
+// 🔥 NEW: HttpClient for Groq API calls (name translation)
+builder.Services.AddHttpClient();
+
 // CORS (Expo / React Native)
 builder.Services.AddCors(options =>
 {
