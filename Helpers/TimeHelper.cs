@@ -7,7 +7,7 @@ namespace AiMeetingBackend.Helpers
     public static class TimeHelper
     {
         // ==================================================
-        // MAIN NORMALIZE FUNCTION
+        // MAIN NORMALIZE FUNCTION - ENHANCED FOR "5.30" FORMAT
         // ==================================================
         public static string Normalize(string time, string fullContext)
         {
@@ -18,6 +18,11 @@ namespace AiMeetingBackend.Helpers
             string context = fullContext?.ToLower() ?? "";
 
             Console.WriteLine($"🕐 NORMALIZING TIME: '{time}' (Context: '{context}')");
+
+            // 🔥 FIX: Convert dot (.) to colon (:) for consistency
+            // "5.30" → "5:30"
+            time = Regex.Replace(time, @"(\d{1,2})\.(\d{2})", "$1:$2");
+            Console.WriteLine($"🔄 After dot conversion: '{time}'");
 
             // =========================
             // 1️⃣ ALREADY HAS AM/PM
@@ -68,6 +73,14 @@ namespace AiMeetingBackend.Helpers
 
             Console.WriteLine($"🔢 EXTRACTED: Hour={hourOnly}, Minutes={minutesPart}");
 
+            // 🔥 VALIDATION: Minutes should be 0-59
+            int minutesInt;
+            if (!int.TryParse(minutesPart, out minutesInt) || minutesInt < 0 || minutesInt > 59)
+            {
+                Console.WriteLine($"❌ INVALID MINUTES: {minutesPart}");
+                return "";
+            }
+
             // =========================
             // 4️⃣ HANDLE 24-HOUR FORMAT
             // =========================
@@ -84,6 +97,13 @@ namespace AiMeetingBackend.Helpers
                 var result = $"12:{minutesPart} AM";
                 Console.WriteLine($"✅ MIDNIGHT: {result}");
                 return result;
+            }
+
+            // 🔥 VALIDATION: Hour should be 1-12
+            if (hourOnly < 1 || hourOnly > 12)
+            {
+                Console.WriteLine($"❌ INVALID HOUR: {hourOnly}");
+                return "";
             }
 
             // =========================
@@ -284,6 +304,9 @@ namespace AiMeetingBackend.Helpers
 
             try
             {
+                // 🔥 FIX: Convert dot to colon before parsing
+                time = Regex.Replace(time, @"(\d{1,2})\.(\d{2})", "$1:$2");
+
                 var formats = new[]
                 {
                     "h:mm tt", "hh:mm tt", "h tt", "hh tt", 

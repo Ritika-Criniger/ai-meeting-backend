@@ -26,7 +26,7 @@ namespace AiMeetingBackend.Helpers
             if (string.IsNullOrWhiteSpace(text))
                 return false;
 
-            // If it's purely ASCII letters, it's already Roman
+            // If it's purely ASCII letters and spaces, it's already Roman
             return Regex.IsMatch(text, @"^[a-zA-Z\s]+$");
         }
 
@@ -42,7 +42,7 @@ namespace AiMeetingBackend.Helpers
             input = Regex.Replace(input, @"\b(Mr|Mrs|Ms|Dr|Shri|Sri|श्री)\.?\s*", "", RegexOptions.IgnoreCase);
             input = Regex.Replace(input, @"\s+", " ").Trim();
 
-            // 🔥 FIX: If already Roman, just clean and capitalize
+            // 🔥 FIX: If already Roman (pure ASCII), just clean and capitalize
             if (IsAlreadyRoman(input))
             {
                 Console.WriteLine($"✅ Already Roman: {input}");
@@ -52,8 +52,11 @@ namespace AiMeetingBackend.Helpers
             // If no Hindi characters, just clean and capitalize
             if (!ContainsHindi(input))
             {
+                Console.WriteLine($"✅ No Hindi: {input}");
                 return CapitalizeWords(input);
             }
+
+            Console.WriteLine($"🔄 Transliterating: {input}");
 
             // Process each word separately
             var words = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
@@ -79,11 +82,15 @@ namespace AiMeetingBackend.Helpers
             }
 
             var result = string.Join(" ", resultWords);
-            return CapitalizeWords(result);
+            result = CleanupTransliteration(result);
+            result = CapitalizeWords(result);
+            
+            Console.WriteLine($"✅ Result: {result}");
+            return result;
         }
 
         // ==================================================
-        // 🔥 CORE TRANSLITERATION - CHARACTER BY CHARACTER
+        // 🔥 CORE TRANSLITERATION - IMPROVED ALGORITHM
         // ==================================================
         private static string TransliterateWord(string word)
         {
@@ -92,110 +99,143 @@ namespace AiMeetingBackend.Helpers
 
             while (i < word.Length)
             {
-                // Try 3-character conjuncts first
-                if (i + 2 < word.Length)
+                char current = word[i];
+                
+                // Look ahead for modifiers
+                char next = (i + 1 < word.Length) ? word[i + 1] : '\0';
+                char nextNext = (i + 2 < word.Length) ? word[i + 2] : '\0';
+
+                // Handle conjuncts (consonant + halant + consonant)
+                if (next == '्' && nextNext != '\0')
                 {
-                    var three = word.Substring(i, 3);
-                    var threeResult = MapThreeChar(three);
-                    if (!string.IsNullOrEmpty(threeResult))
+                    // This is a conjunct: current + halant + nextNext
+                    string consonant1 = MapConsonant(current);
+                    string consonant2 = MapConsonant(nextNext);
+                    
+                    if (!string.IsNullOrEmpty(consonant1) && !string.IsNullOrEmpty(consonant2))
                     {
-                        sb.Append(threeResult);
-                        i += 3;
+                        sb.Append(consonant1);
+                        sb.Append(consonant2);
+                        i += 3; // Skip all three characters
                         continue;
                     }
                 }
 
-                // Try 2-character conjuncts
-                if (i + 1 < word.Length)
+                // Handle consonant + matra
+                if (IsConsonant(current) && IsMatra(next))
                 {
-                    var two = word.Substring(i, 2);
-                    var twoResult = MapTwoChar(two);
-                    if (!string.IsNullOrEmpty(twoResult))
-                    {
-                        sb.Append(twoResult);
-                        i += 2;
-                        continue;
-                    }
+                    string consonant = MapConsonant(current);
+                    string vowel = MapMatra(next);
+                    
+                    sb.Append(consonant);
+                    sb.Append(vowel);
+                    i += 2;
+                    continue;
                 }
 
-                // Try single character
-                var one = word[i];
-                var oneResult = MapSingleChar(one);
-                if (!string.IsNullOrEmpty(oneResult))
+                // Handle standalone consonant (adds inherent 'a')
+                if (IsConsonant(current))
                 {
-                    sb.Append(oneResult);
+                    string consonant = MapConsonant(current);
+                    sb.Append(consonant);
+                    sb.Append('a'); // Inherent 'a'
+                    i++;
+                    continue;
                 }
-                else if (char.IsLetter(one))
+
+                // Handle standalone vowel
+                if (IsVowel(current))
                 {
-                    // Keep unknown letters as-is
-                    sb.Append(one);
+                    string vowel = MapVowel(current);
+                    sb.Append(vowel);
+                    i++;
+                    continue;
+                }
+
+                // Handle other characters
+                var mapped = MapSingleChar(current);
+                if (!string.IsNullOrEmpty(mapped))
+                {
+                    sb.Append(mapped);
+                }
+                else if (char.IsLetter(current))
+                {
+                    sb.Append(current);
                 }
 
                 i++;
             }
 
-            return CleanupTransliteration(sb.ToString());
+            return sb.ToString();
         }
 
         // ==================================================
-        // 🔥 CHARACTER MAPPING FUNCTIONS
+        // 🔥 HELPER: CHECK CHARACTER TYPES
         // ==================================================
-        private static string MapThreeChar(string chars)
+        private static bool IsConsonant(char ch)
         {
-            return chars switch
-            {
-                "क्ष" => "ksh",
-                "त्र" => "tra",
-                "ज्ञ" => "gya",
-                "श्र" => "shr",
-                _ => null
-            };
+            return ch >= 'क' && ch <= 'ह';
         }
 
-        private static string MapTwoChar(string chars)
+        private static bool IsVowel(char ch)
         {
-            return chars switch
-            {
-                // Conjuncts with halant
-                "क्" => "k",
-                "ख्" => "kh",
-                "ग्" => "g",
-                "घ्" => "gh",
-                "च्" => "ch",
-                "छ्" => "chh",
-                "ज्" => "j",
-                "झ्" => "jh",
-                "ट्" => "t",
-                "ठ्" => "th",
-                "ड्" => "d",
-                "ढ्" => "dh",
-                "त्" => "t",
-                "थ्" => "th",
-                "द्" => "d",
-                "ध्" => "dh",
-                "न्" => "n",
-                "प्" => "p",
-                "फ्" => "ph",
-                "ब्" => "b",
-                "भ्" => "bh",
-                "म्" => "m",
-                "य्" => "y",
-                "र्" => "r",
-                "ल्" => "l",
-                "व्" => "v",
-                "श्" => "sh",
-                "ष्" => "sh",
-                "स्" => "s",
-                "ह्" => "h",
-                _ => null
-            };
+            return ch >= 'अ' && ch <= 'औ';
         }
 
-        private static string MapSingleChar(char ch)
+        private static bool IsMatra(char ch)
+        {
+            return (ch >= 'ा' && ch <= 'ौ') || ch == 'ं' || ch == 'ँ' || ch == 'ः';
+        }
+
+        // ==================================================
+        // 🔥 IMPROVED MAPPING FUNCTIONS
+        // ==================================================
+        private static string MapConsonant(char ch)
         {
             return ch switch
             {
-                // Vowels
+                'क' => "k",
+                'ख' => "kh",
+                'ग' => "g",
+                'घ' => "gh",
+                'ङ' => "ng",
+                'च' => "ch",
+                'छ' => "chh",
+                'ज' => "j",
+                'झ' => "jh",
+                'ञ' => "ny",
+                'ट' => "t",
+                'ठ' => "th",
+                'ड' => "d",
+                'ढ' => "dh",
+                'ण' => "n",
+                'त' => "t",
+                'थ' => "th",
+                'द' => "d",
+                'ध' => "dh",
+                'न' => "n",
+                'प' => "p",
+                'फ' => "ph",
+                'ब' => "b",
+                'भ' => "bh",
+                'म' => "m",
+                'य' => "y",
+                'र' => "r",
+                'ल' => "l",
+                'व' => "v",
+                'ळ' => "l",
+                'श' => "sh",
+                'ष' => "sh",
+                'स' => "s",
+                'ह' => "h",
+                _ => null
+            };
+        }
+
+        private static string MapVowel(char ch)
+        {
+            return ch switch
+            {
                 'अ' => "a",
                 'आ' => "aa",
                 'इ' => "i",
@@ -207,44 +247,14 @@ namespace AiMeetingBackend.Helpers
                 'ऐ' => "ai",
                 'ओ' => "o",
                 'औ' => "au",
+                _ => null
+            };
+        }
 
-                // Consonants (with inherent 'a')
-                'क' => "ka",
-                'ख' => "kha",
-                'ग' => "ga",
-                'घ' => "gha",
-                'ङ' => "nga",
-                'च' => "cha",
-                'छ' => "chha",
-                'ज' => "ja",
-                'झ' => "jha",
-                'ञ' => "nya",
-                'ट' => "ta",
-                'ठ' => "tha",
-                'ड' => "da",
-                'ढ' => "dha",
-                'ण' => "na",
-                'त' => "ta",
-                'थ' => "tha",
-                'द' => "da",
-                'ध' => "dha",
-                'न' => "na",
-                'प' => "pa",
-                'फ' => "pha",
-                'ब' => "ba",
-                'भ' => "bha",
-                'म' => "ma",
-                'य' => "ya",
-                'र' => "ra",
-                'ल' => "la",
-                'व' => "va",
-                'ळ' => "la",
-                'श' => "sha",
-                'ष' => "sha",
-                'स' => "sa",
-                'ह' => "ha",
-
-                // Matras (vowel signs)
+        private static string MapMatra(char ch)
+        {
+            return ch switch
+            {
                 'ा' => "aa",
                 'ि' => "i",
                 'ी' => "ee",
@@ -256,35 +266,70 @@ namespace AiMeetingBackend.Helpers
                 'ो' => "o",
                 'ौ' => "au",
                 'ॉ' => "o",
-
-                // Modifiers
                 'ं' => "n",
                 'ँ' => "n",
                 'ः' => "h",
-                '्' => "", // halant (removes inherent 'a')
+                '्' => "", // halant
+                _ => null
+            };
+        }
 
+        private static string MapSingleChar(char ch)
+        {
+            return ch switch
+            {
+                'ं' => "n",
+                'ँ' => "n",
+                'ः' => "h",
+                '्' => "",
                 _ => null
             };
         }
 
         // ==================================================
-        // 🔥 CLEANUP TRANSLITERATION - CONSERVATIVE
+        // 🔥 AGGRESSIVE CLEANUP - REMOVE DOUBLE VOWELS
         // ==================================================
         private static string CleanupTransliteration(string text)
         {
-            // 🔥 FIX: Much more conservative cleanup
-            // Only remove truly excessive repetitions (4+)
-            text = Regex.Replace(text, @"a{4,}", "aa");
-            text = Regex.Replace(text, @"e{4,}", "ee");
-            text = Regex.Replace(text, @"i{4,}", "ii");
-            text = Regex.Replace(text, @"o{4,}", "oo");
-            text = Regex.Replace(text, @"u{4,}", "uu");
+            if (string.IsNullOrWhiteSpace(text))
+                return "";
 
-            // Preserve double vowels like "aa", "ee", "oo"
-            // Only simplify if we have 3+ consecutive same vowels
-            text = Regex.Replace(text, @"([aeiou])\1{4,}", "$1$1");
+            // 🔥 CRITICAL FIX: Remove double vowels more aggressively
+            // "Bhaoomaikaaa" → "Bhoomika"
+            
+            // Step 1: Replace triple+ vowels with double
+            text = Regex.Replace(text, @"a{3,}", "a");
+            text = Regex.Replace(text, @"e{3,}", "e");
+            text = Regex.Replace(text, @"i{3,}", "i");
+            text = Regex.Replace(text, @"o{3,}", "o");
+            text = Regex.Replace(text, @"u{3,}", "u");
 
-            return text;
+            // Step 2: Smart cleanup - keep only necessary double vowels
+            // "aa", "ee", "oo" are valid in Hindi transliteration
+            // But "aaa", "ooo" are not
+            
+            // Replace patterns like "ooa" with "oo" or "ua"
+            text = Regex.Replace(text, @"([aeiou])\1+([aeiou])", m =>
+            {
+                string firstVowel = m.Groups[1].Value;
+                string nextVowel = m.Groups[2].Value;
+                
+                // If same vowel repeated, keep only two
+                if (firstVowel == nextVowel)
+                    return firstVowel + firstVowel;
+                
+                // Different vowels: keep one of each
+                return firstVowel + nextVowel;
+            });
+
+            // Step 3: Final cleanup
+            text = text.Replace("aaa", "a");
+            text = text.Replace("eee", "e");
+            text = text.Replace("iii", "i");
+            text = text.Replace("ooo", "o");
+            text = text.Replace("uuu", "u");
+
+            return text.Trim();
         }
 
         // ==================================================
@@ -342,39 +387,39 @@ namespace AiMeetingBackend.Helpers
             // Remove extra spaces
             name = Regex.Replace(name, @"\s+", " ").Trim();
 
-            // Remove titles (more comprehensive)
+            // Remove titles
             name = Regex.Replace(name, @"^(Mr|Mrs|Ms|Dr|Prof|Shri|Sri|Smt|Kumari|Kumar|श्री|श्रीमती)\.?\s+", "", RegexOptions.IgnoreCase);
 
             // Remove trailing punctuation
             name = name.TrimEnd('.', ',', '!', '?', ';', ':');
 
-            // Remove standalone numbers but preserve if part of name
+            // Remove standalone numbers
             name = Regex.Replace(name, @"\s+\d+\s*$", "").Trim();
             name = Regex.Replace(name, @"^\d+\s+", "").Trim();
 
-            // Clean up multiple spaces again
+            // Remove special characters except spaces
+            name = Regex.Replace(name, @"[^\p{L}\s]", "");
+
+            // Clean up multiple spaces
             name = Regex.Replace(name, @"\s+", " ");
 
             return name;
         }
 
         // ==================================================
-        // 🔥 VALIDATE NAME (OPTIONAL HELPER)
+        // 🔥 VALIDATE NAME
         // ==================================================
         public static bool IsValidName(string name)
         {
             if (string.IsNullOrWhiteSpace(name))
                 return false;
 
-            // Name should have at least 2 characters
             if (name.Length < 2)
                 return false;
 
-            // Name should have at least one letter
             if (!Regex.IsMatch(name, @"[\p{L}]"))
                 return false;
 
-            // Name shouldn't be all numbers
             if (Regex.IsMatch(name, @"^\d+$"))
                 return false;
 
