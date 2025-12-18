@@ -19,6 +19,18 @@ namespace AiMeetingBackend.Helpers
         }
 
         // ==================================================
+        // 🔥 CHECK IF TEXT IS ALREADY IN ROMAN/ENGLISH
+        // ==================================================
+        private static bool IsAlreadyRoman(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            // If it's purely ASCII letters, it's already Roman
+            return Regex.IsMatch(text, @"^[a-zA-Z\s]+$");
+        }
+
+        // ==================================================
         // 🔥 MAIN ENTRY POINT - SMART TRANSLITERATION
         // ==================================================
         public static string ToRoman(string input)
@@ -29,6 +41,13 @@ namespace AiMeetingBackend.Helpers
             // Remove common titles
             input = Regex.Replace(input, @"\b(Mr|Mrs|Ms|Dr|Shri|Sri|श्री)\.?\s*", "", RegexOptions.IgnoreCase);
             input = Regex.Replace(input, @"\s+", " ").Trim();
+
+            // 🔥 FIX: If already Roman, just clean and capitalize
+            if (IsAlreadyRoman(input))
+            {
+                Console.WriteLine($"✅ Already Roman: {input}");
+                return CapitalizeWords(input);
+            }
 
             // If no Hindi characters, just clean and capitalize
             if (!ContainsHindi(input))
@@ -249,25 +268,21 @@ namespace AiMeetingBackend.Helpers
         }
 
         // ==================================================
-        // 🔥 CLEANUP TRANSLITERATION - FIXED
+        // 🔥 CLEANUP TRANSLITERATION - CONSERVATIVE
         // ==================================================
         private static string CleanupTransliteration(string text)
         {
-            // Only reduce excessive repetitions (3+ consecutive)
-            // This preserves correct names like "Jeeta", "Bhoot"
-            text = Regex.Replace(text, @"a{3,}", "aa");
-            text = Regex.Replace(text, @"e{3,}", "ee");
-            text = Regex.Replace(text, @"i{3,}", "ii");
-            text = Regex.Replace(text, @"o{3,}", "oo");
-            text = Regex.Replace(text, @"u{3,}", "uu");
+            // 🔥 FIX: Much more conservative cleanup
+            // Only remove truly excessive repetitions (4+)
+            text = Regex.Replace(text, @"a{4,}", "aa");
+            text = Regex.Replace(text, @"e{4,}", "ee");
+            text = Regex.Replace(text, @"i{4,}", "ii");
+            text = Regex.Replace(text, @"o{4,}", "oo");
+            text = Regex.Replace(text, @"u{4,}", "uu");
 
-            // ❌ REMOVED: Aggressive vowel simplification that destroyed names
-            // text = text.Replace("aa", "a");
-            // text = text.Replace("ee", "i");
-            // text = text.Replace("oo", "u");
-
-            // Only simplify when we have excessive repetition
-            text = Regex.Replace(text, @"([aeiou])\1{3,}", "$1$1"); // Max 2 repetitions
+            // Preserve double vowels like "aa", "ee", "oo"
+            // Only simplify if we have 3+ consecutive same vowels
+            text = Regex.Replace(text, @"([aeiou])\1{4,}", "$1$1");
 
             return text;
         }
@@ -317,7 +332,7 @@ namespace AiMeetingBackend.Helpers
         }
 
         // ==================================================
-        // 🔥 CLEAN NAME - REMOVE NOISE - ENHANCED
+        // 🔥 CLEAN NAME - REMOVE NOISE
         // ==================================================
         public static string CleanName(string name)
         {
@@ -334,7 +349,6 @@ namespace AiMeetingBackend.Helpers
             name = name.TrimEnd('.', ',', '!', '?', ';', ':');
 
             // Remove standalone numbers but preserve if part of name
-            // This allows "Rajesh 123" but removes "Rajesh 123 456"
             name = Regex.Replace(name, @"\s+\d+\s*$", "").Trim();
             name = Regex.Replace(name, @"^\d+\s+", "").Trim();
 
@@ -345,7 +359,7 @@ namespace AiMeetingBackend.Helpers
         }
 
         // ==================================================
-        // 🔥 VALIDATE NAME (OPTIONAL HELPER) - ENHANCED
+        // 🔥 VALIDATE NAME (OPTIONAL HELPER)
         // ==================================================
         public static bool IsValidName(string name)
         {

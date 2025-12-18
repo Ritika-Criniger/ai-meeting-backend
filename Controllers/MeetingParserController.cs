@@ -116,24 +116,27 @@ namespace AiMeetingBackend.Controllers
             http.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", apiKey);
 
-            var payload = new
-            {
-                model = "llama-3.3-70b-versatile",
-                temperature = 0,
-                response_format = new { type = "json_object" },
-                messages = new[]
-                {
-                    new
-                    {
-                        role = "system",
-                        content = @"You are an expert meeting information extractor for Indian users speaking Hindi, English, or Hinglish. Extract ONLY these fields and return VALID JSON.
+           // 🔥 FIXED GROQ PROMPT - Place this in your CallGroqAsync method
+
+var payload = new
+{
+    model = "llama-3.3-70b-versatile",
+    temperature = 0,
+    response_format = new { type = "json_object" },
+    messages = new[]
+    {
+        new
+        {
+            role = "system",
+            content = @"You are an expert meeting information extractor for Indian users speaking Hindi, English, or Hinglish. Extract ONLY these fields and return VALID JSON.
 
 **FIELDS TO EXTRACT:**
 
-1. **clientName**: FULL person's name EXACTLY as spoken (preserve Hindi/English)
+1. **clientName**: FULL person's name EXACTLY as spoken
+   - Preserve original spelling - do NOT modify English names
+   - ""Rakesh"" → ""Rakesh"" (NOT ""Raakaesha"")
+   - ""Vikrant Hada"" → ""Vikrant Hada"" (NOT ""Vaikraanta Hadaa"")
    - ""राजेश धनोत्या"" → ""राजेश धनोत्या""
-   - ""Akash Daima"" → ""Akash Daima""
-   - ""रमेश कुमार"" → ""रमेश कुमार""
    - ""meeting with X"" → extract X
    - ""X ke saath meeting"" → extract X
 
@@ -149,6 +152,8 @@ namespace AiMeetingBackend.Controllers
    - ""after 2 days"" → ""after 2 days""
    - ""next friday"" → ""next friday""
    - ""22 december 2025"" → ""22 december 2025""
+   - ""22 december"" → ""22 december"" (year optional)
+   - ""22 dec"" → ""22 dec""
 
 4. **startTime**: Start time EXACTLY as mentioned
    - ""7 PM"" → ""7 PM""
@@ -163,53 +168,60 @@ namespace AiMeetingBackend.Controllers
 
 **🔥 CRITICAL TIME RANGE RULES:**
 
-When user says ""X se Y"" or ""X to Y"":
-- X = START time (FIRST number/time)
-- Y = END time (SECOND number/time)
-- This is NOT addition, NOT duration calculation
+When user says ""X se Y"" or ""X to Y"" or ""X से Y"":
+- X = START time (FIRST number/time) → extract to startTime
+- Y = END time (SECOND number/time) → extract to endTime
+- Extract EXACTLY what is said, do NOT add, calculate, or modify times
 
-Examples:
-- ""4 se 4:30"" → startTime=""4"", endTime=""4:30"" 
-  ❌ WRONG: startTime=""4"", endTime=""6"" (DO NOT ADD!)
-  
-- ""10 to 11"" → startTime=""10"", endTime=""11""
-  ❌ WRONG: startTime=""10"", endTime=""21"" (DO NOT ADD!)
+✅ CORRECT Examples:
+Input: ""4 se 4:30""
+Output: startTime=""4"", endTime=""4:30""
 
-- ""7 PM se 8 PM"" → startTime=""7 PM"", endTime=""8 PM""
+Input: ""10 to 11""
+Output: startTime=""10"", endTime=""11""
 
-- ""4:30 se 5:45"" → startTime=""4:30"", endTime=""5:45""
+Input: ""7 PM se 8 PM""
+Output: startTime=""7 PM"", endTime=""8 PM""
 
-- ""shaam 4 se 4:30"" → startTime=""4"", endTime=""4:30""
+Input: ""shaam 4 se 4:30""
+Output: startTime=""4"", endTime=""4:30""
+
+❌ WRONG Examples (DO NOT DO THIS):
+Input: ""4 se 4:30""
+Wrong: startTime=""4"", endTime=""8:30"" (DO NOT ADD)
+Wrong: startTime=""4"", endTime=""6"" (DO NOT CALCULATE)
 
 **OTHER CRITICAL RULES:**
 
 ⚠️ NAME EXTRACTION:
-- Extract complete names, don't truncate
-- Preserve original script (Hindi/English/Mixed)
-- ""X ke saath meeting"" → extract X
-- ""meeting with X"" → extract X
+- Keep English names in their ORIGINAL spelling
+- Do NOT romanize or transliterate names that are already in English
+- ""Rakesh"" stays ""Rakesh"", NOT ""Raakaesha""
+- ""Vikrant"" stays ""Vikrant"", NOT ""Vaikraanta""
+- Only preserve Hindi names as-is: ""राजेश"" → ""राजेश""
 - Remove titles: Mr, Mrs, Shri, etc.
+
+⚠️ DATE EXTRACTION:
+- Accept dates WITH or WITHOUT year
+- ""22 december"" → ""22 december"" (valid)
+- ""22 december 2025"" → ""22 december 2025"" (valid)
+- ""22 dec"" → ""22 dec"" (valid)
 
 ⚠️ MOBILE NUMBER:
 - Only extract 10-digit numbers starting with 6-9
 - Remove spaces: ""98765 43210"" → ""9876543210""
 - Ignore date numbers, time numbers
 
-⚠️ DATE KEYWORDS:
-- ""kal"" can mean tomorrow
-- ""parso"" means day after tomorrow
-- ""agle"" or ""next"" means skip to next occurrence
-
 ⚠️ TIME KEYWORDS:
-- ""shaam"" or ""evening"" → PM
-- ""subah"" or ""morning"" → AM
-- ""raat"" or ""night"" → PM
-- ""ko"" is a Hindi suffix (ignore it)
+- ""shaam"" or ""evening"" → indicates PM (but don't add PM unless said)
+- ""subah"" or ""morning"" → indicates AM (but don't add AM unless said)
+- ""se"", ""to"", ""से"" → indicates time range, extract both times separately
 
 ⚠️ DEFAULT VALUES:
 - Use empty string """" if field not found
 - Do NOT guess or make up information
 - Do NOT calculate or manipulate numbers
+- Extract EXACTLY what is said
 
 **EXAMPLES:**
 
@@ -219,24 +231,27 @@ Output: {""clientName"": """", ""mobileNumber"": """", ""meetingDate"": """", ""
 Input: ""राजेश धनोत्या के साथ मीटिंग kal 7 PM से 8 PM""
 Output: {""clientName"": ""राजेश धनोत्या"", ""mobileNumber"": """", ""meetingDate"": ""kal"", ""startTime"": ""7 PM"", ""endTime"": ""8 PM""}
 
-Input: ""akash daima 9876543210 se milna hai parso 10 se 11""
-Output: {""clientName"": ""akash daima"", ""mobileNumber"": ""9876543210"", ""meetingDate"": ""parso"", ""startTime"": ""10"", ""endTime"": ""11""}
+Input: ""rakesh sharma 9876543210 se milna hai parso 10 se 11""
+Output: {""clientName"": ""rakesh sharma"", ""mobileNumber"": ""9876543210"", ""meetingDate"": ""parso"", ""startTime"": ""10"", ""endTime"": ""11""}
 
-Input: ""meeting tomorrow with ravi kumar at 3:30 PM to 5 PM""
-Output: {""clientName"": ""ravi kumar"", ""mobileNumber"": """", ""meetingDate"": ""tomorrow"", ""startTime"": ""3:30 PM"", ""endTime"": ""5 PM""}
+Input: ""meeting tomorrow with vikrant hada at 3:30 PM to 5 PM""
+Output: {""clientName"": ""vikrant hada"", ""mobileNumber"": """", ""meetingDate"": ""tomorrow"", ""startTime"": ""3:30 PM"", ""endTime"": ""5 PM""}
 
-Input: ""shaam 8 ko meeting rakesh 9123456789""
-Output: {""clientName"": ""rakesh"", ""mobileNumber"": ""9123456789"", ""meetingDate"": """", ""startTime"": ""8"", ""endTime"": """"}
+Input: ""Akash Daima 22 december 4 se 4:30""
+Output: {""clientName"": ""Akash Daima"", ""mobileNumber"": """", ""meetingDate"": ""22 december"", ""startTime"": ""4"", ""endTime"": ""4:30""}
+
+Input: ""विक्रांत हाडा के साथ 22 dec को meeting""
+Output: {""clientName"": ""विक्रांत हाडा"", ""mobileNumber"": """", ""meetingDate"": ""22 dec"", ""startTime"": """", ""endTime"": """"}
 
 Return ONLY valid JSON, no markdown, no extra text."
-                    },
-                    new
-                    {
-                        role = "user",
-                        content = text
-                    }
-                }
-            };
+        },
+        new
+        {
+            role = "user",
+            content = text
+        }
+    }
+};
 
             try
             {

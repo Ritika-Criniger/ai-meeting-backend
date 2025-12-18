@@ -126,11 +126,11 @@ namespace AiMeetingBackend.Helpers
             }
 
             // ==================================================
-            // 🔥 ABSOLUTE DATE WITHOUT YEAR: "22 december"
+            // 🔥 ABSOLUTE DATE WITHOUT YEAR: "22 december" or "22 dec" - FIXED
             // ==================================================
             var dateNoYearMatch = Regex.Match(
                 input,
-                @"(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?:uary|ruary|ch|il|e|y|ust|tember|ober|ember)?(?!\s+\d{4})",
+                @"(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b(?!\s*\d{4})",
                 RegexOptions.IgnoreCase
             );
 
@@ -140,6 +140,10 @@ namespace AiMeetingBackend.Helpers
                 {
                     int day = int.Parse(dateNoYearMatch.Groups[1].Value);
                     string monthStr = dateNoYearMatch.Groups[2].Value.ToLower();
+
+                    // Get first 3 letters for month matching
+                    if (monthStr.Length > 3)
+                        monthStr = monthStr.Substring(0, 3);
 
                     int month = GetMonthNumber(monthStr);
 
@@ -226,9 +230,11 @@ namespace AiMeetingBackend.Helpers
         // ==================================================
         private static int GetMonthNumber(string monthStr)
         {
-            // Ensure minimum length
-            if (monthStr.Length < 3)
+            if (string.IsNullOrWhiteSpace(monthStr))
                 return 0;
+
+            // Ensure we only use first 3 characters
+            monthStr = monthStr.Substring(0, Math.Min(3, monthStr.Length)).ToLower();
 
             var monthMap = new Dictionary<string, int>
             {
@@ -237,7 +243,6 @@ namespace AiMeetingBackend.Helpers
                 {"sep", 9}, {"oct", 10}, {"nov", 11}, {"dec", 12}
             };
 
-            monthStr = monthStr.Substring(0, Math.Min(3, monthStr.Length)).ToLower();
             return monthMap.ContainsKey(monthStr) ? monthMap[monthStr] : 0;
         }
 
