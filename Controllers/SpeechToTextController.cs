@@ -25,16 +25,16 @@ namespace AiMeetingBackend.Controllers
             if (audio == null || audio.Length == 0)
                 return BadRequest(new { success = false, message = "Audio file missing" });
 
-            var groqKey = _config["Groq:ApiKey"];
-            if (string.IsNullOrWhiteSpace(groqKey))
-                return StatusCode(500, new { success = false, message = "Groq API key missing" });
+            var openaiKey = _config["OpenAI:ApiKey"];
+            if (string.IsNullOrWhiteSpace(openaiKey))
+                return StatusCode(500, new { success = false, message = "OpenAI API key missing" });
 
             try
             {
                 using var http = new HttpClient();
-                http.Timeout = TimeSpan.FromSeconds(30); // Prevent hanging
+                http.Timeout = TimeSpan.FromSeconds(60); // OpenAI can be slower than Groq
                 http.DefaultRequestHeaders.Authorization =
-                    new AuthenticationHeaderValue("Bearer", groqKey);
+                    new AuthenticationHeaderValue("Bearer", openaiKey);
 
                 using var form = new MultipartFormDataContent();
 
@@ -48,20 +48,22 @@ namespace AiMeetingBackend.Controllers
 
                 form.Add(audioContent, "file", audio.FileName ?? "audio.m4a");
 
-                // 🔥 GROQ WHISPER MODEL
-                form.Add(new StringContent("whisper-large-v3"), "model");
+                // 🔥 OPENAI WHISPER MODEL
+                form.Add(new StringContent("whisper-1"), "model");
 
-                // 🔥 CRITICAL: Let Whisper auto-detect language
-                // This ensures accurate transcription for Hindi/English/Hinglish
+                // 🔥 CRITICAL: No language parameter - let Whisper auto-detect
+                // This gives best results for Hindi/English/Hinglish mix
 
-                // Add response format for better output
+                // Response format for structured output
                 form.Add(new StringContent("json"), "response_format");
 
-                // Optional: Add temperature for more accurate transcription
+                // Temperature = 0 for maximum accuracy (no creativity needed)
                 form.Add(new StringContent("0"), "temperature");
 
+                Console.WriteLine($"🎤 SENDING TO OPENAI WHISPER: {audio.FileName} ({audio.Length} bytes)");
+
                 var response = await http.PostAsync(
-                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    "https://api.openai.com/v1/audio/transcriptions",
                     form
                 );
 
@@ -69,8 +71,14 @@ namespace AiMeetingBackend.Controllers
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    Console.WriteLine("❌ Groq API Error: " + raw);
-                    return StatusCode(500, new { success = false, message = "Transcription failed", error = raw });
+                    Console.WriteLine($"❌ OpenAI API Error: {raw}");
+                    return StatusCode(500, new 
+                    { 
+                        success = false, 
+                        message = "Transcription failed", 
+                        error = raw,
+                        statusCode = (int)response.StatusCode
+                    });
                 }
 
                 using var doc = JsonDocument.Parse(raw);
@@ -88,21 +96,36 @@ namespace AiMeetingBackend.Controllers
                 return Ok(new
                 {
                     success = true,
-                    provider = "groq",
-                    model = "whisper-large-v3",
+                    provider = "openai",
+                    model = "whisper-1",
                     text,
-                    length = text.Length
+                    length = text.Length,
+                    originalLength = audio.Length
+                });
+            }
+            catch (TaskCanceledException)
+            {
+                Console.WriteLine("❌ REQUEST TIMEOUT");
+                return StatusCode(504, new 
+                { 
+                    success = false, 
+                    message = "Request timeout - audio too long or network issue" 
                 });
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"❌ SPEECH-TO-TEXT ERROR: {ex.Message}");
-                return StatusCode(500, new { success = false, message = ex.Message });
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = ex.Message,
+                    type = ex.GetType().Name
+                });
             }
         }
 
         // ==================================================
-        // 🔥 SMART CLEANUP FUNCTION
+        // 🔥 ENHANCED CLEANUP FUNCTION
         // ==================================================
         private string CleanupTranscription(string text)
         {
@@ -112,34 +135,58 @@ namespace AiMeetingBackend.Controllers
             // 1. Normalize whitespace
             text = Regex.Replace(text, @"\s+", " ").Trim();
 
-            // 2. Remove common filler words (English + Hindi)
+            // 2. Remove common filler words (English + Hindi) - but preserve name context
             var fillers = new[]
             {
-                "um", "uh", "hmm", "aa", "eh", "err", "ahh",
-                "तो", "वो", "यार", "भाई"
+                @"\bum\b", @"\buh\b", @"\bhmm\b", @"\baa+h*\b", @"\beh\b", @"\berr\b"
             };
 
             foreach (var filler in fillers)
             {
-                text = Regex.Replace(text, $@"\b{filler}\b", "", RegexOptions.IgnoreCase);
+                text = Regex.Replace(text, filler, "", RegexOptions.IgnoreCase);
             }
 
-            // 3. Fix common transcription errors
-            text = text.Replace("  ", " "); // Double spaces
-            text = Regex.Replace(text, @"\s+", " "); // Multiple spaces
-
-            // 4. Remove leading/trailing punctuation noise
-            text = Regex.Replace(text, @"^[,.\-\s]+", "");
-            text = Regex.Replace(text, @"[,.\-\s]+$", "");
-
-            // 5. Fix spacing around numbers (phone numbers especially)
+            // 3. Fix spacing around numbers (critical for phone numbers)
             // "98765 43210" → "9876543210"
             text = Regex.Replace(text, @"(\d)\s+(\d)", "$1$2");
 
-            // 6. Normalize Hindi-English mixing
+            // 4. Normalize common speech-to-text errors
             text = text.Replace("  ", " ");
+            
+            // Fix common Hindi words that get mangled
+            text = Regex.Replace(text, @"\bke\s+sath\b", "ke saath", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"\bse\s+le\b", "se", RegexOptions.IgnoreCase);
+
+            // 5. Remove leading/trailing punctuation noise
+            text = Regex.Replace(text, @"^[,.\-\s]+", "");
+            text = Regex.Replace(text, @"[,.\-\s]+$", "");
+
+            // 6. Fix time formats that get broken
+            // "5 : 30" → "5:30"
+            text = Regex.Replace(text, @"(\d+)\s*:\s*(\d+)", "$1:$2");
+            
+            // "5 . 30" → "5.30" (will be converted to 5:30 later)
+            text = Regex.Replace(text, @"(\d+)\s*\.\s*(\d+)", "$1.$2");
 
             return text.Trim();
+        }
+
+        // ==================================================
+        // 🔥 OPTIONAL: TEST ENDPOINT FOR DEBUGGING
+        // ==================================================
+        [HttpGet("test")]
+        public IActionResult Test()
+        {
+            var openaiKey = _config["OpenAI:ApiKey"];
+            var hasKey = !string.IsNullOrWhiteSpace(openaiKey);
+            var keyPrefix = hasKey ? openaiKey.Substring(0, Math.Min(10, openaiKey.Length)) : "NOT_SET";
+
+            return Ok(new
+            {
+                configured = hasKey,
+                keyPrefix = keyPrefix + "...",
+                model = _config["OpenAI:WhisperModel"] ?? "whisper-1"
+            });
         }
     }
 }

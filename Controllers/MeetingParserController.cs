@@ -1,5 +1,3 @@
-// MeetingParserController.cs - PRODUCTION READY WITH TRANSLITERATION
-
 using Microsoft.AspNetCore.Mvc;
 using System.Net.Http.Headers;
 using System.Text;
@@ -32,19 +30,19 @@ namespace AiMeetingBackend.Controllers
                 });
             }
 
-            var groqKey = _config["Groq:ApiKey"];
-            if (string.IsNullOrWhiteSpace(groqKey))
+            var openaiKey = _config["OpenAI:ApiKey"];
+            if (string.IsNullOrWhiteSpace(openaiKey))
             {
-                return StatusCode(500, "Groq API key missing");
+                return StatusCode(500, "OpenAI API key missing");
             }
 
             var userText = request.Text.Trim();
             Console.WriteLine($"📝 INPUT TEXT: {userText}");
 
             // ===============================
-            // 1️⃣ CALL GROQ FOR EXTRACTION
+            // 1️⃣ CALL GPT-4 MINI FOR EXTRACTION
             // ===============================
-            var aiResult = await CallGroqAsync(userText, groqKey);
+            var aiResult = await CallOpenAIAsync(userText, openaiKey);
 
             // ===============================
             // 2️⃣ SAFE FALLBACK (REGEX ONLY IF EMPTY)
@@ -55,7 +53,7 @@ namespace AiMeetingBackend.Controllers
             // 3️⃣ NORMALIZATION (HELPERS)
             // ===============================
 
-            // 🔹 NAME → Clean, Transliterate, and Capitalize
+            // 🔹 NAME → Clean, Transliterate ONLY if Hindi, Capitalize
             if (!string.IsNullOrWhiteSpace(aiResult.ClientName))
             {
                 Console.WriteLine($"🔄 Processing name: {aiResult.ClientName}");
@@ -64,21 +62,41 @@ namespace AiMeetingBackend.Controllers
                 aiResult.ClientName = HindiRomanTransliterator.CleanName(aiResult.ClientName);
                 Console.WriteLine($"  ✓ After cleaning: {aiResult.ClientName}");
                 
-                // Step 2: Transliterate if Hindi is present
-                aiResult.ClientName = HindiRomanTransliterator.ToRoman(aiResult.ClientName);
-                Console.WriteLine($"  ✓ After transliteration: {aiResult.ClientName}");
+                // Step 2: Transliterate ONLY if contains Hindi characters
+                if (HindiRomanTransliterator.ContainsHindi(aiResult.ClientName))
+                {
+                    aiResult.ClientName = HindiRomanTransliterator.ToRoman(aiResult.ClientName);
+                    Console.WriteLine($"  ✓ After transliteration: {aiResult.ClientName}");
+                }
+                else
+                {
+                    // English name - just capitalize properly
+                    aiResult.ClientName = CapitalizeEnglishName(aiResult.ClientName);
+                    Console.WriteLine($"  ✓ English name capitalized: {aiResult.ClientName}");
+                }
                 
                 Console.WriteLine($"✅ FINAL NAME: {aiResult.ClientName}");
             }
 
-            // 🔹 DATE
+            // 🔹 DATE - with comprehensive validation
             if (!string.IsNullOrWhiteSpace(aiResult.MeetingDate))
             {
+                var originalDate = aiResult.MeetingDate;
                 aiResult.MeetingDate = DateHelper.ResolveDate(aiResult.MeetingDate);
-                Console.WriteLine($"✅ FINAL DATE: {aiResult.MeetingDate}");
+                
+                // Validate the resolved date
+                if (!DateHelper.IsValidDate(aiResult.MeetingDate))
+                {
+                    Console.WriteLine($"⚠️ INVALID DATE RESOLVED: {originalDate} → {aiResult.MeetingDate}");
+                    aiResult.MeetingDate = ""; // Clear invalid date
+                }
+                else
+                {
+                    Console.WriteLine($"✅ FINAL DATE: {aiResult.MeetingDate}");
+                }
             }
 
-            // 🔹 TIME
+            // 🔹 TIME - with context-aware normalization
             if (!string.IsNullOrWhiteSpace(aiResult.StartTime))
             {
                 aiResult.StartTime = TimeHelper.Normalize(aiResult.StartTime, userText);
@@ -89,6 +107,16 @@ namespace AiMeetingBackend.Controllers
             {
                 aiResult.EndTime = TimeHelper.Normalize(aiResult.EndTime, userText);
                 Console.WriteLine($"✅ FINAL END TIME: {aiResult.EndTime}");
+            }
+
+            // 🔹 VALIDATE TIME RANGE
+            if (!string.IsNullOrWhiteSpace(aiResult.StartTime) && 
+                !string.IsNullOrWhiteSpace(aiResult.EndTime))
+            {
+                if (!TimeHelper.IsValidTimeRange(aiResult.StartTime, aiResult.EndTime))
+                {
+                    Console.WriteLine($"⚠️ INVALID TIME RANGE: {aiResult.StartTime} to {aiResult.EndTime}");
+                }
             }
 
             // ===============================
@@ -113,18 +141,18 @@ namespace AiMeetingBackend.Controllers
         }
 
         // ==================================================
-        // 🔥 IMPROVED GROQ CALL - UPDATED PROMPT
+        // 🔥 GPT-4 MINI CALL - PRODUCTION OPTIMIZED
         // ==================================================
-        private async Task<AiResult> CallGroqAsync(string text, string apiKey)
+        private async Task<AiResult> CallOpenAIAsync(string text, string apiKey)
         {
             using var http = new HttpClient();
-            http.Timeout = TimeSpan.FromSeconds(20);
+            http.Timeout = TimeSpan.FromSeconds(30);
             http.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", apiKey);
 
             var payload = new
             {
-                model = "llama-3.3-70b-versatile",
+                model = "gpt-4o-mini", // Cost-effective and fast
                 temperature = 0,
                 response_format = new { type = "json_object" },
                 messages = new[]
@@ -132,49 +160,58 @@ namespace AiMeetingBackend.Controllers
                     new
                     {
                         role = "system",
-                        content = @"You are an expert at extracting meeting information from Hindi, English, or Hinglish speech.
+                        content = @"You are an expert at extracting meeting information from Hindi, English, or Hinglish speech transcriptions.
 
-**EXTRACTION RULES:**
+**CRITICAL EXTRACTION RULES:**
 
-1. **clientName**: Extract EXACTLY as spoken (preserve original script)
+1. **clientName**: Extract EXACTLY as spoken, preserve original script and case
    - Hindi: ""भूमिका टेकम"" → ""भूमिका टेकम""
-   - English: ""Rakesh Sharma"" → ""Rakesh Sharma""
+   - English: ""Rakesh Sharma"" → ""Rakesh Sharma"" (preserve capitals)
+   - English: ""rakesh sharma"" → ""rakesh sharma"" (preserve lowercase)
    - Hinglish: ""Nandini Jain"" → ""Nandini Jain""
-   - Remove titles: Mr, Mrs, Shri, etc.
+   - NEVER change capitalization
+   - Remove titles: Mr, Mrs, Shri, Ms, Dr, etc.
 
 2. **mobileNumber**: 10-digit Indian phone number (digits only)
    - Extract: ""9876543210""
    - Ignore date/time numbers
+   - Must start with 6, 7, 8, or 9
 
 3. **meetingDate**: Date phrase EXACTLY as spoken
    - ""tomorrow"" → ""tomorrow""
    - ""kal"" → ""kal""
    - ""22 december"" → ""22 december""
    - ""22 दिसंबर"" → ""22 दिसंबर""
+   - ""parso"" → ""parso""
 
-4. **startTime**: Start time EXACTLY as mentioned
+4. **startTime**: Start time with format preserved
    - ""5 PM"" → ""5 PM""
    - ""4:30"" → ""4:30""
-   - ""5.30"" → ""5.30"" (keep dot format)
+   - ""5.30 PM"" → ""5.30 PM"" (keep dot if present)
+   - Extract complete time, not just minutes
 
-5. **endTime**: End time EXACTLY as mentioned
+5. **endTime**: End time with format preserved
    - ""8 PM"" → ""8 PM""
    - ""5:30"" → ""5:30""
-   - ""5.30"" → ""5.30"" (keep dot format)
+   - ""5.30 PM"" → ""5.30 PM""
 
-**TIME FORMAT RULES:**
+**TIME EXTRACTION - CRITICAL:**
 
-For ""X to Y"" or ""X se Y"":
-✅ ""5 pm to 5.30 pm"" → startTime=""5 pm"", endTime=""5.30 pm""
-✅ ""4 se 4.30"" → startTime=""4"", endTime=""4.30""
+For patterns like ""X to Y"" or ""X se Y"":
+✅ CORRECT: ""5 pm to 5.30 pm"" → startTime=""5 pm"", endTime=""5.30 pm""
+✅ CORRECT: ""4 se 4.30"" → startTime=""4"", endTime=""4.30""
+❌ WRONG: ""5 pm to 5.30 pm"" → endTime=""30 pm"" (NEVER extract minutes alone!)
+❌ WRONG: ""4 to 5"" → startTime=""to 5"" (NEVER include prepositions!)
 
-⚠️ NEVER extract minutes alone:
-❌ ""5 pm to 5.30 pm"" → endTime=""30 pm"" (WRONG!)
-✅ ""5 pm to 5.30 pm"" → endTime=""5.30 pm"" (CORRECT!)
+**AM/PM DETECTION:**
+- If text contains: ""shaam"", ""evening"", ""raat"", ""night"", ""ko"", ""baad"" → likely PM
+- If text contains: ""subah"", ""morning"", ""savere"" → likely AM
+- Include AM/PM in extracted time if mentioned
 
 **DEFAULT VALUES:**
 - Use empty string """" if field not found
 - Do NOT guess or make up information
+- Do NOT invent names, numbers, or times
 
 **EXAMPLES:**
 
@@ -184,8 +221,11 @@ Output: {""clientName"": ""भूमिका टेकम"", ""mobileNumber"": 
 Input: ""Rakesh Sharma meeting tomorrow 4 PM to 5 PM mobile 9876543210""
 Output: {""clientName"": ""Rakesh Sharma"", ""mobileNumber"": ""9876543210"", ""meetingDate"": ""tomorrow"", ""startTime"": ""4 PM"", ""endTime"": ""5 PM""}
 
-Input: ""Nandini Jain 8 फरवरी 5 pm to 5:30 pm""
-Output: {""clientName"": ""Nandini Jain"", ""mobileNumber"": """", ""meetingDate"": ""8 फरवरी"", ""startTime"": ""5 pm"", ""endTime"": ""5:30 pm""}
+Input: ""nandini jain 8 february 5 pm to 5:30 pm call 9123456789""
+Output: {""clientName"": ""nandini jain"", ""mobileNumber"": ""9123456789"", ""meetingDate"": ""8 february"", ""startTime"": ""5 pm"", ""endTime"": ""5:30 pm""}
+
+Input: ""Meet with john doe tomorrow at 10""
+Output: {""clientName"": ""john doe"", ""mobileNumber"": """", ""meetingDate"": ""tomorrow"", ""startTime"": ""10"", ""endTime"": """"}
 
 Return ONLY valid JSON, no markdown, no extra text."
                     },
@@ -200,7 +240,7 @@ Return ONLY valid JSON, no markdown, no extra text."
             try
             {
                 var response = await http.PostAsync(
-                    "https://api.groq.com/openai/v1/chat/completions",
+                    "https://api.openai.com/v1/chat/completions",
                     new StringContent(
                         JsonSerializer.Serialize(payload),
                         Encoding.UTF8,
@@ -209,11 +249,11 @@ Return ONLY valid JSON, no markdown, no extra text."
                 );
 
                 var raw = await response.Content.ReadAsStringAsync();
-                Console.WriteLine("🔥 RAW GROQ RESPONSE: " + raw);
+                Console.WriteLine("🔥 RAW OPENAI RESPONSE: " + raw);
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    Console.WriteLine("❌ Groq API Error: " + raw);
+                    Console.WriteLine("❌ OpenAI API Error: " + raw);
                     return new AiResult();
                 }
 
@@ -231,7 +271,7 @@ Return ONLY valid JSON, no markdown, no extra text."
             }
             catch (Exception ex)
             {
-                Console.WriteLine("❌ GROQ CALL ERROR: " + ex.Message);
+                Console.WriteLine("❌ OPENAI CALL ERROR: " + ex.Message);
                 return new AiResult();
             }
         }
@@ -271,7 +311,7 @@ Return ONLY valid JSON, no markdown, no extra text."
         {
             Console.WriteLine("🔍 APPLYING REGEX FALLBACK...");
 
-            // Mobile Number
+            // Mobile Number - with strict validation
             if (string.IsNullOrWhiteSpace(result.MobileNumber))
             {
                 var textNoSpaces = Regex.Replace(text, @"(\d)\s+(\d)", "$1$2");
@@ -284,7 +324,7 @@ Return ONLY valid JSON, no markdown, no extra text."
                 }
             }
 
-            // Client Name (keep in original script, will be transliterated later)
+            // Client Name - preserve original case
             if (string.IsNullOrWhiteSpace(result.ClientName))
             {
                 var hindiMatch = Regex.Match(text, @"([\p{L}\s]+?)\s+(?:ke\s+saath|साथ|के\s+साथ)\s+(?:meeting|मीटिंग)", RegexOptions.IgnoreCase);
@@ -302,7 +342,7 @@ Return ONLY valid JSON, no markdown, no extra text."
                 }
             }
 
-            // Date - Enhanced
+            // Date
             if (string.IsNullOrWhiteSpace(result.MeetingDate))
             {
                 if (Regex.IsMatch(text, @"\b(today|aaj|आज)\b", RegexOptions.IgnoreCase))
@@ -319,10 +359,13 @@ Return ONLY valid JSON, no markdown, no extra text."
                 }
             }
 
-            // Time Range
+            // Time Range - improved extraction
             if (string.IsNullOrWhiteSpace(result.StartTime) || string.IsNullOrWhiteSpace(result.EndTime))
             {
-                var timeMatch = Regex.Match(text, @"(\d{1,2})(?::(\d{2}))?\s*(?:pm|am|पीएम|एएम)?\s*(?:se|to|से)\s*(\d{1,2})(?::(\d{2}))?\s*(?:pm|am|पीएम|एएम)?", RegexOptions.IgnoreCase);
+                // Pattern: "5 pm to 5.30 pm" or "4 se 4:30"
+                var timeMatch = Regex.Match(text, 
+                    @"(\d{1,2})(?:[:\.](\d{2}))?\s*(?:pm|am|पीएम|एएम)?\s*(?:se|to|से)\s*(\d{1,2})(?:[:\.](\d{2}))?\s*(?:pm|am|पीएम|एएम)?", 
+                    RegexOptions.IgnoreCase);
                 
                 if (timeMatch.Success)
                 {
@@ -345,26 +388,62 @@ Return ONLY valid JSON, no markdown, no extra text."
             }
         }
 
+        // ==================================================
+        // 🔥 CAPITALIZE ENGLISH NAMES PROPERLY
+        // ==================================================
+        private string CapitalizeEnglishName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+
+            var words = name.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            
+            for (int i = 0; i < words.Length; i++)
+            {
+                if (words[i].Length > 0)
+                {
+                    // Check if already properly capitalized
+                    if (char.IsUpper(words[i][0]) && words[i].Substring(1) == words[i].Substring(1).ToLower())
+                    {
+                        continue; // Already properly formatted
+                    }
+                    
+                    // Otherwise, capitalize first letter
+                    words[i] = char.ToUpper(words[i][0]) + words[i].Substring(1).ToLower();
+                }
+            }
+
+            return string.Join(" ", words);
+        }
+
         private List<string> Validate(AiResult r)
         {
             var errors = new List<string>();
 
             if (string.IsNullOrWhiteSpace(r.ClientName))
                 errors.Add("Client name missing");
+            else if (!HindiRomanTransliterator.IsValidName(r.ClientName))
+                errors.Add("Invalid client name format");
 
             if (string.IsNullOrWhiteSpace(r.MobileNumber))
                 errors.Add("Mobile number missing");
             else if (!Regex.IsMatch(r.MobileNumber, @"^[6-9]\d{9}$"))
-                errors.Add("Invalid mobile number format");
+                errors.Add("Invalid mobile number format (must be 10 digits starting with 6-9)");
 
             if (string.IsNullOrWhiteSpace(r.MeetingDate))
                 errors.Add("Meeting date missing");
+            else if (!DateHelper.IsValidDate(r.MeetingDate))
+                errors.Add("Invalid or past meeting date");
 
             if (string.IsNullOrWhiteSpace(r.StartTime))
                 errors.Add("Start time missing");
 
             if (string.IsNullOrWhiteSpace(r.EndTime))
                 errors.Add("End time missing");
+
+            if (!string.IsNullOrWhiteSpace(r.StartTime) && 
+                !string.IsNullOrWhiteSpace(r.EndTime) &&
+                !TimeHelper.IsValidTimeRange(r.StartTime, r.EndTime))
+                errors.Add("Invalid time range (end time must be after start time)");
 
             return errors;
         }
@@ -382,6 +461,6 @@ Return ONLY valid JSON, no markdown, no extra text."
         public string MeetingDate { get; set; } = "";
         public string StartTime { get; set; } = "";
         public string EndTime { get; set; } = "";
-        public double Confidence { get; set; } = 0.9;
+        public double Confidence { get; set; } = 0.95;
     }
 }

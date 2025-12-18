@@ -1,4 +1,4 @@
-// HindiRomanTransliterator.cs - PRODUCTION READY VERSION
+// HindiRomanTransliterator.cs - PRODUCTION READY - ENGLISH NAME FIX
 
 using System;
 using System.Collections.Generic;
@@ -67,31 +67,32 @@ namespace AiMeetingBackend.Helpers
             return !string.IsNullOrWhiteSpace(text) && Regex.IsMatch(text, @"^[a-zA-Z\s]+$");
         }
 
-        // ✅ MAIN ENTRY POINT
+        // ✅ MAIN ENTRY POINT - FIXED FOR ENGLISH NAMES
         public static string ToRoman(string input)
         {
             if (string.IsNullOrWhiteSpace(input)) return "";
 
-            Console.WriteLine($"🔄 Input: {input}");
+            Console.WriteLine($"🔄 Input: '{input}'");
 
             // Clean input
             input = CleanName(input);
 
-            // If already Roman, just capitalize
+            // 🔥 CRITICAL FIX: If already Roman (English), DON'T transliterate!
             if (IsAlreadyRoman(input))
             {
-                Console.WriteLine($"✅ Already Roman: {input}");
+                Console.WriteLine($"✅ Already English/Roman: '{input}'");
+                // Just capitalize properly and return
                 return CapitalizeWords(input);
             }
 
-            // If no Hindi, return as-is
+            // If no Hindi, return as-is with proper capitalization
             if (!ContainsHindi(input))
             {
-                Console.WriteLine($"✅ No Hindi detected: {input}");
+                Console.WriteLine($"✅ No Hindi detected: '{input}'");
                 return CapitalizeWords(input);
             }
 
-            // Process word by word
+            // Process word by word (only for Hindi words)
             var words = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             var resultWords = new List<string>();
 
@@ -105,6 +106,7 @@ namespace AiMeetingBackend.Helpers
                 }
                 else
                 {
+                    // English word - keep as is
                     resultWords.Add(word);
                 }
             }
@@ -116,11 +118,11 @@ namespace AiMeetingBackend.Helpers
             result = ApplyCommonNameFixes(result);
             result = CapitalizeWords(result);
             
-            Console.WriteLine($"✅ Final Output: {result}");
+            Console.WriteLine($"✅ Final Output: '{result}'");
             return result;
         }
 
-        // ✅ CORE TRANSLITERATION ENGINE - IMPROVED
+        // ✅ CORE TRANSLITERATION ENGINE
         private static string TransliterateWord(string word)
         {
             var sb = new StringBuilder();
@@ -145,16 +147,15 @@ namespace AiMeetingBackend.Helpers
                 {
                     sb.Append(ConsonantMap[current]);
                     sb.Append(ConsonantMap[nextNext]);
-                    i += 3; // Skip all three characters
+                    i += 3;
                     continue;
                 }
 
-                // 3️⃣ Handle consonant + matra (क + ा → kaa)
+                // 3️⃣ Handle consonant + matra (क + ा → ka)
                 if (ConsonantMap.ContainsKey(current) && MatraMap.ContainsKey(next))
                 {
                     sb.Append(ConsonantMap[current]);
                     
-                    // Don't add anything for halant
                     if (next != '्')
                     {
                         sb.Append(MatraMap[next]);
@@ -169,21 +170,15 @@ namespace AiMeetingBackend.Helpers
                 {
                     sb.Append(ConsonantMap[current]);
                     
-                    // Check what follows
                     bool followedByHalant = (next == '्');
                     bool followedByMatra = MatraMap.ContainsKey(next);
                     bool isLastChar = (i == word.Length - 1);
                     bool isBeforeSpace = (next == ' ' || next == '\0');
                     
-                    // ✅ CRITICAL FIX: Only add inherent 'a' in specific cases
-                    if (!followedByHalant && !followedByMatra)
+                    // Add inherent 'a' only in middle of word
+                    if (!followedByHalant && !followedByMatra && !isLastChar && !isBeforeSpace)
                     {
-                        // Add 'a' if consonant is in the middle of the word
-                        if (!isLastChar && !isBeforeSpace)
-                        {
-                            sb.Append('a');
-                        }
-                        // Don't add 'a' at the end of words to avoid "Bhoomikaa"
+                        sb.Append('a');
                     }
                     
                     i++;
@@ -210,7 +205,7 @@ namespace AiMeetingBackend.Helpers
             return sb.ToString();
         }
 
-        // ✅ AGGRESSIVE CLEANUP
+        // ✅ CLEANUP TRANSLITERATION
         private static string CleanupTransliteration(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return "";
@@ -222,13 +217,10 @@ namespace AiMeetingBackend.Helpers
             text = Regex.Replace(text, @"o{3,}", "o");
             text = Regex.Replace(text, @"u{3,}", "u");
 
-            // Fix common double vowel issues
-            text = Regex.Replace(text, @"aa+", "a");  // "bhuumikaaa" → "bhumika"
-            text = Regex.Replace(text, @"ee+", "ee"); // Keep "ee" for ई
-            text = Regex.Replace(text, @"oo+", "oo"); // Keep "oo" for ऊ
-
-            // Remove trailing 'a' from words (common issue)
-            text = Regex.Replace(text, @"\ba([a-z]+)a\b", "a$1"); // "bhaa" → "bha"
+            // Fix double vowels
+            text = Regex.Replace(text, @"aa+", "aa");
+            text = Regex.Replace(text, @"ee+", "ee");
+            text = Regex.Replace(text, @"oo+", "oo");
 
             return text.Trim();
         }
@@ -245,7 +237,6 @@ namespace AiMeetingBackend.Helpers
             {
                 var lower = word.ToLower().Trim();
                 
-                // Check if this word matches a known name pattern
                 if (CommonNameFixes.ContainsKey(lower))
                 {
                     fixedWords.Add(CommonNameFixes[lower]);
@@ -259,7 +250,7 @@ namespace AiMeetingBackend.Helpers
             return string.Join(" ", fixedWords);
         }
 
-        // ✅ SMART CAPITALIZATION
+        // ✅ SMART CAPITALIZATION - PRESERVES ORIGINAL CASE IF PROPER
         private static string CapitalizeWords(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return "";
@@ -271,6 +262,16 @@ namespace AiMeetingBackend.Helpers
                 if (words[i].Length == 0) continue;
 
                 var lower = words[i].ToLower();
+                
+                // Check if word is already properly capitalized
+                bool isProperCase = char.IsUpper(words[i][0]) && 
+                                   words[i].Substring(1) == words[i].Substring(1).ToLower();
+                
+                if (isProperCase)
+                {
+                    // Already properly formatted, keep it
+                    continue;
+                }
                 
                 // Special handling for common surnames
                 words[i] = lower switch
@@ -313,7 +314,7 @@ namespace AiMeetingBackend.Helpers
             name = Regex.Replace(name, @"\s+\d+\s*$", "").Trim();
             name = Regex.Replace(name, @"^\d+\s+", "").Trim();
 
-            // Remove special characters except spaces and Hindi characters
+            // Remove special characters except spaces and Unicode letters
             name = Regex.Replace(name, @"[^\p{L}\s]", "");
 
             // Final space cleanup
