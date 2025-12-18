@@ -23,6 +23,22 @@ namespace AiMeetingBackend.Controllers
             _config = config;
         }
 
+        // Simple helper: capitalize each word for pure English names
+        private static string CapitalizeWordsSimple(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+
+            var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                var word = parts[i].ToLowerInvariant();
+                if (word.Length == 0) continue;
+                parts[i] = char.ToUpperInvariant(word[0]) + (word.Length > 1 ? word.Substring(1) : string.Empty);
+            }
+
+            return string.Join(" ", parts);
+        }
+
         [HttpPost]
         public async Task<IActionResult> Parse([FromBody] ParseRequest request)
         {
@@ -68,38 +84,36 @@ namespace AiMeetingBackend.Controllers
             ApplyRegexFallback(userText, aiResult);
 
             // ===============================
-            // 3️⃣ NAME NORMALIZATION (3-STEP PROCESS)
+            // 3️⃣ NAME NORMALIZATION (Hindi vs pure English)
             // ===============================
             if (!string.IsNullOrWhiteSpace(aiResult.ClientName))
             {
                 Console.WriteLine($"🔄 STARTING NAME PROCESSING: '{aiResult.ClientName}'");
-                
+
                 // Step 1: Clean (remove titles, numbers, etc.)
                 aiResult.ClientName = HindiRomanTransliterator.CleanName(aiResult.ClientName);
                 Console.WriteLine($"  Step 1 - Cleaned: '{aiResult.ClientName}'");
-                
-                // Step 2: Transliterate ONLY if Hindi script is present
-                var originalClientName = aiResult.ClientName;
-                bool hasHindiInName = HindiRomanTransliterator.ContainsHindi(aiResult.ClientName);
-                bool hasHindiInText = HindiRomanTransliterator.ContainsHindi(userText);
 
-                if (hasHindiInName || hasHindiInText)
+                var hasHindiChars = HindiRomanTransliterator.ContainsHindi(aiResult.ClientName);
+
+                if (hasHindiChars)
                 {
+                    // 🔤 HINDI / MIXED: transliterate + Indian-specific corrections
                     aiResult.ClientName = HindiRomanTransliterator.ToRoman(aiResult.ClientName);
-                    Console.WriteLine($"  Step 2 - Transliterated (Hindi detected): '{aiResult.ClientName}'");
+                    Console.WriteLine($"  Step 2 - Transliterated (Hindi) → '{aiResult.ClientName}'");
 
-                    // Step 3: Apply Indian Name Corrections ONLY for Hindi / Hinglish scenarios
                     aiResult.ClientName = IndianNameCorrector.CorrectName(aiResult.ClientName);
-                    Console.WriteLine($"  Step 3 - Corrected (Hindi/Hinglish): '{aiResult.ClientName}'");
+                    Console.WriteLine($"  Step 3 - Corrected (Hindi) → '{aiResult.ClientName}'");
                 }
                 else
                 {
-                    // Pure English / Roman input – do NOT run IndianNameCorrector
-                    // to avoid changing valid English names (Rahul, Anil, etc.).
-                    Console.WriteLine("  Step 2/3 - Skipped (pure English/Roman input, no Hindi detected)");
-                    aiResult.ClientName = originalClientName;
+                    // 🔤 PURE ENGLISH / ROMAN TEXT:
+                    // Do NOT run IndianNameCorrector here to avoid "bigadna" of English names.
+                    // Just apply simple capitalization, keeping Whisper/GPT output mostly as-is.
+                    aiResult.ClientName = CapitalizeWordsSimple(aiResult.ClientName);
+                    Console.WriteLine($"  Step 2 - English name kept with simple caps → '{aiResult.ClientName}'");
                 }
-                
+
                 Console.WriteLine($"✅ FINAL NAME: '{aiResult.ClientName}'");
             }
 
@@ -216,23 +230,17 @@ namespace AiMeetingBackend.Controllers
    - ""shaam"", ""evening"", ""ko"", ""baad"" → PM
    - ""subah"", ""morning"" → AM
 
-8. **ENGLISH NAME RULES (VERY IMPORTANT):**
-   - For purely English sentences (no Hindi script), you MUST take the name exactly from the user text.
-   - Do NOT invent or substitute different Indian names (for example: do NOT change ""Ranu"" to ""Rahul"", ""Anil"", etc.).
-   - If the pattern is ""Schedule meeting with Ranu and Verma"", treat this as one person: ""Ranu Verma"".
-
-9. **OUTPUT SCHEMA (IMPORTANT):**
+8. **OUTPUT SCHEMA (IMPORTANT):**
    You MUST return a single JSON object with these fields:
-   You must return exactly this JSON shape (no extra fields):
    {
      ""clientName"": string,
      ""mobileNumber"": string,
      ""meetingDate"": string,
      ""startTime"": string,
      ""endTime"": string,
-     ""clientNameSpanStart"": integer,  // 0-based index in the original user text, or -1 if unknown
-     ""clientNameSpanEnd"": integer,    // exclusive index, or -1 if unknown
-     ""clientNameSpanText"": string     // exact substring for the name, or empty
+     ""clientNameSpanStart"": integer (0-based index in the original user text, or -1 if unknown),
+     ""clientNameSpanEnd"": integer (exclusive index, or -1 if unknown),
+     ""clientNameSpanText"": string (exact substring for the name, or empty)
    }
 
 **EXAMPLES (DO NOT CHANGE NAMES):**
