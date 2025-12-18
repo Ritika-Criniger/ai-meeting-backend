@@ -32,7 +32,7 @@ namespace AiMeetingBackend.Controllers
             try
             {
                 using var http = new HttpClient();
-                http.Timeout = TimeSpan.FromSeconds(30);
+                http.Timeout = TimeSpan.FromSeconds(30); // Prevent hanging
                 http.DefaultRequestHeaders.Authorization =
                     new AuthenticationHeaderValue("Bearer", groqKey);
 
@@ -51,15 +51,13 @@ namespace AiMeetingBackend.Controllers
                 // 🔥 GROQ WHISPER MODEL
                 form.Add(new StringContent("whisper-large-v3"), "model");
 
-                // 🔥 CRITICAL FIX: Force English transcription
-                // This makes Whisper transcribe Hindi audio into English (romanized)
-                form.Add(new StringContent("en"), "language");
-                Console.WriteLine("🌍 FORCING ENGLISH TRANSCRIPTION");
+                // 🔥 CRITICAL: Let Whisper auto-detect language
+                // This ensures accurate transcription for Hindi/English/Hinglish
 
                 // Add response format for better output
                 form.Add(new StringContent("json"), "response_format");
 
-                // Temperature 0 for consistent results
+                // Optional: Add temperature for more accurate transcription
                 form.Add(new StringContent("0"), "temperature");
 
                 var response = await http.PostAsync(
@@ -78,7 +76,7 @@ namespace AiMeetingBackend.Controllers
                 using var doc = JsonDocument.Parse(raw);
                 var text = doc.RootElement.GetProperty("text").GetString() ?? "";
 
-                Console.WriteLine($"🎤 RAW TRANSCRIBED TEXT (English): {text}");
+                Console.WriteLine($"🎤 RAW TRANSCRIBED TEXT: {text}");
 
                 // ==================================================
                 // 🔥 SMART CLEANUP (preserve meaning, remove noise)
@@ -92,7 +90,6 @@ namespace AiMeetingBackend.Controllers
                     success = true,
                     provider = "groq",
                     model = "whisper-large-v3",
-                    language = "en",
                     text,
                     length = text.Length
                 });
@@ -115,11 +112,11 @@ namespace AiMeetingBackend.Controllers
             // 1. Normalize whitespace
             text = Regex.Replace(text, @"\s+", " ").Trim();
 
-            // 2. Remove common filler words (English + Hindi romanized)
+            // 2. Remove common filler words (English + Hindi)
             var fillers = new[]
             {
                 "um", "uh", "hmm", "aa", "eh", "err", "ahh",
-                "toh", "wo", "yaar", "bhai"
+                "तो", "वो", "यार", "भाई"
             };
 
             foreach (var filler in fillers)
@@ -139,8 +136,8 @@ namespace AiMeetingBackend.Controllers
             // "98765 43210" → "9876543210"
             text = Regex.Replace(text, @"(\d)\s+(\d)", "$1$2");
 
-            // 6. Normalize case - capitalize first letter of each word
-            text = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(text.ToLower());
+            // 6. Normalize Hindi-English mixing
+            text = text.Replace("  ", " ");
 
             return text.Trim();
         }
