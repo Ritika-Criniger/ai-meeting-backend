@@ -78,20 +78,27 @@ namespace AiMeetingBackend.Controllers
                 aiResult.ClientName = HindiRomanTransliterator.CleanName(aiResult.ClientName);
                 Console.WriteLine($"  Step 1 - Cleaned: '{aiResult.ClientName}'");
                 
-                // Step 2: Transliterate ONLY if Hindi
-                if (HindiRomanTransliterator.ContainsHindi(aiResult.ClientName))
+                // Step 2: Transliterate ONLY if Hindi script is present
+                var originalClientName = aiResult.ClientName;
+                bool hasHindiInName = HindiRomanTransliterator.ContainsHindi(aiResult.ClientName);
+                bool hasHindiInText = HindiRomanTransliterator.ContainsHindi(userText);
+
+                if (hasHindiInName || hasHindiInText)
                 {
                     aiResult.ClientName = HindiRomanTransliterator.ToRoman(aiResult.ClientName);
-                    Console.WriteLine($"  Step 2 - Transliterated: '{aiResult.ClientName}'");
+                    Console.WriteLine($"  Step 2 - Transliterated (Hindi detected): '{aiResult.ClientName}'");
+
+                    // Step 3: Apply Indian Name Corrections ONLY for Hindi / Hinglish scenarios
+                    aiResult.ClientName = IndianNameCorrector.CorrectName(aiResult.ClientName);
+                    Console.WriteLine($"  Step 3 - Corrected (Hindi/Hinglish): '{aiResult.ClientName}'");
                 }
                 else
                 {
-                    Console.WriteLine($"  Step 2 - Skipped (already Roman)");
+                    // Pure English / Roman input – do NOT run IndianNameCorrector
+                    // to avoid changing valid English names (Rahul, Anil, etc.).
+                    Console.WriteLine("  Step 2/3 - Skipped (pure English/Roman input, no Hindi detected)");
+                    aiResult.ClientName = originalClientName;
                 }
-                
-                // Step 3: Apply Indian Name Corrections (NEW!)
-                aiResult.ClientName = IndianNameCorrector.CorrectName(aiResult.ClientName);
-                Console.WriteLine($"  Step 3 - Corrected: '{aiResult.ClientName}'");
                 
                 Console.WriteLine($"✅ FINAL NAME: '{aiResult.ClientName}'");
             }
@@ -209,17 +216,23 @@ namespace AiMeetingBackend.Controllers
    - ""shaam"", ""evening"", ""ko"", ""baad"" → PM
    - ""subah"", ""morning"" → AM
 
-8. **OUTPUT SCHEMA (IMPORTANT):**
+8. **ENGLISH NAME RULES (VERY IMPORTANT):**
+   - For purely English sentences (no Hindi script), you MUST take the name exactly from the user text.
+   - Do NOT invent or substitute different Indian names (for example: do NOT change ""Ranu"" to ""Rahul"", ""Anil"", etc.).
+   - If the pattern is ""Schedule meeting with Ranu and Verma"", treat this as one person: ""Ranu Verma"".
+
+9. **OUTPUT SCHEMA (IMPORTANT):**
    You MUST return a single JSON object with these fields:
+   You must return exactly this JSON shape (no extra fields):
    {
      ""clientName"": string,
      ""mobileNumber"": string,
      ""meetingDate"": string,
      ""startTime"": string,
      ""endTime"": string,
-     ""clientNameSpanStart"": integer (0-based index in the original user text, or -1 if unknown),
-     ""clientNameSpanEnd"": integer (exclusive index, or -1 if unknown),
-     ""clientNameSpanText"": string (exact substring for the name, or empty)
+     ""clientNameSpanStart"": integer,  // 0-based index in the original user text, or -1 if unknown
+     ""clientNameSpanEnd"": integer,    // exclusive index, or -1 if unknown
+     ""clientNameSpanText"": string     // exact substring for the name, or empty
    }
 
 **EXAMPLES (DO NOT CHANGE NAMES):**
