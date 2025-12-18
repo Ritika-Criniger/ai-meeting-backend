@@ -348,10 +348,13 @@ Return ONLY valid JSON."
             else if (!HindiRomanTransliterator.IsValidName(r.ClientName))
                 errors.Add("Invalid client name format");
 
-            if (string.IsNullOrWhiteSpace(r.MobileNumber))
-                errors.Add("Mobile number missing");
-            else if (!Regex.IsMatch(r.MobileNumber, @"^[6-9]\d{9}$"))
+            // 🔁 Mobile number is OPTIONAL for the meeting,
+            // but if it is present then it must be a valid Indian 10‑digit number.
+            if (!string.IsNullOrWhiteSpace(r.MobileNumber) &&
+                !Regex.IsMatch(r.MobileNumber, @"^[6-9]\d{9}$"))
+            {
                 errors.Add("Invalid mobile number");
+            }
 
             if (string.IsNullOrWhiteSpace(r.MeetingDate))
                 errors.Add("Meeting date missing");

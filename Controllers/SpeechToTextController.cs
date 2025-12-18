@@ -54,6 +54,17 @@ namespace AiMeetingBackend.Controllers
                 // 🔥 CRITICAL: No language parameter - let Whisper auto-detect
                 // This gives best results for Hindi/English/Hinglish mix
 
+                // Strong prompt to bias transcription towards accurate Indian names,
+                // numbers, dates and times for CRM meeting scenarios.
+                form.Add(new StringContent(
+                    "You are transcribing audio for an enterprise CRM meeting scheduler. " +
+                    "Transcribe VERY ACCURATELY in the same language (Hindi, English or Hinglish). " +
+                    "Pay special attention to INDIAN FIRST NAMES and SURNAMES (for example: Neeraj, Nilesh, Rakesh, Vikrant, Kumawat, Tekam, Sharma, Verma, Jain, Agarwal, Bhumika, Gauri, etc.). " +
+                    "Do NOT translate or replace names with other English words. " +
+                    "Keep all digits exactly for mobile numbers and times. " +
+                    "Preserve and correctly spell words related to dates and days (today, tomorrow, kal, parso, Monday, Somwar, etc.)."
+                ), "prompt");
+
                 // Response format for structured output
                 form.Add(new StringContent("json"), "response_format");
 
